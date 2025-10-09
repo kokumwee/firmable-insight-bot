@@ -519,7 +519,7 @@ serve(async (req) => {
   }
 
   try {
-    const { url, fullCrawl = true } = await req.json();
+    const { url } = await req.json();
 
     if (!url || typeof url !== 'string') {
       return new Response(JSON.stringify({
@@ -532,110 +532,15 @@ serve(async (req) => {
     }
 
     const normalizedUrl = normalizeUrl(url);
-    console.log('Analyzing URL:', normalizedUrl, '| Full crawl:', fullCrawl);
+    console.log('Analyzing URL:', normalizedUrl);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    let pages: any[];
-    let chunks: any[];
-    let truncated = false;
-
-    if (fullCrawl) {
-      // Stage 1: Full site crawl
-      console.log('Stage: Full-site crawl...');
-      const crawlResult = await crawlSite(normalizedUrl, supabase);
-      pages = crawlResult.pages;
-      chunks = crawlResult.chunks;
-      truncated = crawlResult.truncated;
-    } else {
-      // Stage 1: Single-page analysis
-      console.log('Stage: Single-page fetch...');
-      const fetchResult = await robustFetch(normalizedUrl);
-      
-      if (!fetchResult.ok) {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: {
-            code: fetchResult.code,
-            message: fetchResult.message
-          }
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      // Clean HTML
-      let cleanedHtml = fetchResult.html!.replace(/<script[\s\S]*?<\/script>/gi, '');
-      cleanedHtml = cleanedHtml.replace(/<style[\s\S]*?<\/style>/gi, '');
-      cleanedHtml = cleanedHtml.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
-      const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-      if (textContent.length < MIN_TEXT_LEN) {
-        return new Response(JSON.stringify({
-          ok: false,
-          error: {
-            code: 'EMPTY_CONTENT',
-            message: "This page doesn't have enough readable content."
-          }
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      // Calculate hash
-      const encoder = new TextEncoder();
-      const data = encoder.encode(textContent);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const contentHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-      const baseUrl = new URL(normalizedUrl);
-      
-      // Store single page
-      const { data: pageData, error: pageError } = await supabase.from('pages').upsert({
-        url: normalizedUrl,
-        origin: baseUrl.origin,
-        path: baseUrl.pathname,
-        page_type: 'homepage',
-        status_code: 200,
-        content_hash: contentHash,
-        content_len: textContent.length,
-        blocked: false
-      }).select().single();
-
-      if (pageError) {
-        console.error("Error storing page:", pageError);
-        throw pageError;
-      }
-
-      pages = [pageData];
-      
-      // Chunk text
-      const chunkSize = 750;
-      let offset = 0;
-      let chunkIndex = 0;
-      chunks = [];
-      
-      while (offset < textContent.length) {
-        const chunkText = textContent.slice(offset, offset + chunkSize);
-        chunks.push({
-          page_id: pageData.id,
-          url: normalizedUrl,
-          chunk_id: `c${chunkIndex + 1}`,
-          text: chunkText,
-          text_offset: offset,
-          source_url: normalizedUrl,
-          path: baseUrl.pathname,
-          page_type: 'homepage'
-        });
-        offset += chunkSize;
-        chunkIndex++;
-      }
-    }
+    // Stage 1: Crawl site
+    console.log('Stage: Crawling site...');
+    const { pages, chunks, truncated } = await crawlSite(normalizedUrl, supabase);
 
     if (pages.length === 0 || chunks.length === 0) {
       return new Response(JSON.stringify({
@@ -869,7 +774,6 @@ serve(async (req) => {
       ok: true,
       data: companyCard,
       crawl: {
-        enabled: fullCrawl,
         total_pages: pages.length,
         total_chunks: chunks.length,
         truncated

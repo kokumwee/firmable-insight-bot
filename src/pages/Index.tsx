@@ -8,8 +8,6 @@ import { CompanyCard } from "@/components/CompanyCard";
 import { ChatSection } from "@/components/ChatSection";
 import { EngagementInsights } from "@/components/EngagementInsights";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -54,21 +52,8 @@ const Index = () => {
   const [state, setState] = useState<AppState>("idle");
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number; fullCrawl: boolean } | null>(null);
-  const [fullSiteCrawlEnabled, setFullSiteCrawlEnabled] = useState(false);
+  const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
   const { toast } = useToast();
-
-  const normalizeUrl = (input: string): string => {
-    if (!input) return input;
-    let normalized = input.trim();
-    if (!/^https?:\/\//i.test(normalized)) normalized = "https://" + normalized;
-    try {
-      const u = new URL(normalized);
-      u.host = u.host.toLowerCase();
-      u.hash = "";
-      return u.toString();
-    } catch { return normalized; }
-  };
 
   const handleAnalyze = async () => {
     if (!url.trim()) {
@@ -82,42 +67,26 @@ const Index = () => {
 
     setState("loading");
     setErrorMessage("");
-    
-    const initialStage = fullSiteCrawlEnabled ? "discovering" : "fetching";
-    setCrawlProgress({ stage: initialStage, current: 0, total: 0, fullCrawl: fullSiteCrawlEnabled });
+    setCrawlProgress({ stage: "discovering", current: 0, total: 0 });
 
     try {
       // Simulate progress updates (in production, this would be real-time via websockets)
       const progressInterval = setInterval(() => {
         setCrawlProgress(prev => {
           if (!prev) return null;
-          
-          if (prev.fullCrawl) {
-            // Full-site crawl stages
-            if (prev.stage === "discovering") {
-              return { ...prev, stage: "crawling", current: 0, total: 50 };
-            } else if (prev.stage === "crawling" && prev.current < prev.total) {
-              return { ...prev, current: prev.current + 5 };
-            } else if (prev.stage === "crawling") {
-              return { ...prev, stage: "extracting", current: 0, total: 0 };
-            }
-          } else {
-            // Single-page stages
-            if (prev.stage === "fetching") {
-              return { ...prev, stage: "parsing" };
-            } else if (prev.stage === "parsing") {
-              return { ...prev, stage: "extracting" };
-            }
+          if (prev.stage === "discovering") {
+            return { stage: "crawling", current: 0, total: 50 };
+          } else if (prev.stage === "crawling" && prev.current < prev.total) {
+            return { ...prev, current: prev.current + 5 };
+          } else if (prev.stage === "crawling") {
+            return { stage: "extracting", current: 0, total: 0 };
           }
           return prev;
         });
       }, 1000);
 
       const { data, error } = await supabase.functions.invoke('analyze', {
-        body: { 
-          url: normalizeUrl(url.trim()),
-          fullCrawl: fullSiteCrawlEnabled
-        }
+        body: { url: url.trim() }
       });
 
       clearInterval(progressInterval);
@@ -128,15 +97,7 @@ const Index = () => {
 
       if (!data.ok) {
         setState("error");
-        let errorMsg = data.error?.message || "We couldn't analyze this site. Please try another URL.";
-        
-        // Add contextual tip based on mode
-        if (!fullSiteCrawlEnabled && data.error?.code === "BLOCKED_OR_EMPTY") {
-          errorMsg = "We couldn't read this page. Tip: Try turning on Full-site crawl to discover About/Company pages.";
-        } else if (fullSiteCrawlEnabled && data.error?.code === "EMPTY_SITE") {
-          errorMsg = "Some pages were blocked or empty — we couldn't find enough content to analyze.";
-        }
-        
+        const errorMsg = data.error?.message || "We couldn't analyze this site. Please try another URL.";
         setErrorMessage(errorMsg);
         
         toast({
@@ -214,7 +175,7 @@ const Index = () => {
         </header>
 
         {/* URL Input Section */}
-        <div className="max-w-2xl mx-auto mb-12 animate-slide-up space-y-4">
+        <div className="max-w-2xl mx-auto mb-12 animate-slide-up">
           <div className="flex gap-4">
             <Input
               type="url"
@@ -234,29 +195,6 @@ const Index = () => {
               <Search className="h-5 w-5 mr-2" />
               Analyze
             </Button>
-          </div>
-          
-          {/* Full-site crawl toggle */}
-          <div className="flex items-start gap-3 px-1">
-            <Switch
-              id="fullSiteCrawlEnabled"
-              checked={fullSiteCrawlEnabled}
-              onCheckedChange={setFullSiteCrawlEnabled}
-              disabled={state === "loading"}
-            />
-            <div className="flex flex-col gap-1">
-              <Label 
-                htmlFor="fullSiteCrawlEnabled" 
-                className="text-sm font-medium cursor-pointer"
-              >
-                Full-site crawl (slower)
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {fullSiteCrawlEnabled 
-                  ? "Crawls the whole site via sitemap/BFS. May take longer."
-                  : "Analyzes just this page for fastest results."}
-              </p>
-            </div>
           </div>
         </div>
 
