@@ -190,6 +190,7 @@ export type Database = {
           origin: string
           page_type: string
           path: string
+          reason: string | null
           status_code: number | null
           url: string
         }
@@ -204,6 +205,7 @@ export type Database = {
           origin: string
           page_type: string
           path: string
+          reason?: string | null
           status_code?: number | null
           url: string
         }
@@ -218,6 +220,7 @@ export type Database = {
           origin?: string
           page_type?: string
           path?: string
+          reason?: string | null
           status_code?: number | null
           url?: string
         }

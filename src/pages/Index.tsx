@@ -56,8 +56,10 @@ const Index = () => {
   const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
   const { toast } = useToast();
 
-  const handleAnalyze = async () => {
-    if (!url.trim()) {
+  const handleAnalyze = async (urlToAnalyze?: string) => {
+    const targetUrl = urlToAnalyze || url.trim();
+    
+    if (!targetUrl) {
       toast({
         title: "Invalid URL",
         description: "Please enter a valid website URL.",
@@ -87,7 +89,7 @@ const Index = () => {
       }, 1000);
 
       const { data, error } = await supabase.functions.invoke('analyze', {
-        body: { url: url.trim() }
+        body: { url: targetUrl }
       });
 
       clearInterval(progressInterval);
@@ -101,6 +103,11 @@ const Index = () => {
         const errorMsg = data.error?.message || "We couldn't analyze this site. Please try another URL.";
         setErrorMessage(errorMsg);
         
+        // For neighbor analyze failures, throw error to be caught by neighbor component
+        if (urlToAnalyze && data.error?.code === 'EMPTY_SITE') {
+          throw new Error(errorMsg);
+        }
+        
         toast({
           title: "Analysis Failed",
           description: errorMsg,
@@ -111,6 +118,7 @@ const Index = () => {
 
       setCompanyData(data.data as CompanyData);
       setState("success");
+      setUrl(targetUrl); // Update URL input if analyzing a neighbor
       
       toast({
         title: "Analysis Complete",
@@ -125,6 +133,11 @@ const Index = () => {
       setState("error");
       const errorMsg = error instanceof Error ? error.message : "We couldn't analyze this site. Please try another URL.";
       setErrorMessage(errorMsg);
+      
+      // Re-throw for neighbor analysis to handle
+      if (urlToAnalyze) {
+        throw error;
+      }
       
       toast({
         title: "Analysis Failed",
@@ -188,7 +201,7 @@ const Index = () => {
               className="flex-1 text-base"
             />
             <Button
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={state === "loading"}
               size="lg"
               className="px-8"
@@ -208,7 +221,7 @@ const Index = () => {
             <AlertDescription>
               <div className="flex items-center justify-between mb-2">
                 <span>{errorMessage}</span>
-                <Button variant="outline" size="sm" onClick={handleAnalyze}>
+                <Button variant="outline" size="sm" onClick={() => handleAnalyze()}>
                   Retry
                 </Button>
               </div>

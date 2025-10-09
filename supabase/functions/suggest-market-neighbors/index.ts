@@ -156,40 +156,66 @@ Rules:
 
     console.log('[suggest-market-neighbors] AI returned', neighbors.length, 'neighbors');
 
-    // Sanitize and enrich neighbors
-    neighbors = neighbors
-      .filter((n: any) => {
-        // Validate required fields
-        if (!n.name || !n.url || !n.description) return false;
-        // Check URL format
-        if (!n.url.match(/^https?:\/\//)) return false;
-        // Exclude same domain
-        try {
-          const inputDomain = new URL(normalizedUrl).hostname;
-          const neighborDomain = new URL(n.url).hostname;
-          return inputDomain !== neighborDomain;
-        } catch {
-          return false;
+    // Sanitize and validate neighbors
+    const validatedNeighbors = [];
+    
+    for (const n of neighbors) {
+      // Validate required fields
+      if (!n.name || !n.url || !n.description) continue;
+      if (!n.url.match(/^https?:\/\//)) continue;
+      
+      // Exclude same domain
+      try {
+        const inputDomain = new URL(normalizedUrl).hostname;
+        const neighborDomain = new URL(n.url).hostname;
+        if (inputDomain === neighborDomain) continue;
+      } catch {
+        continue;
+      }
+      
+      // Quick homepage check with short timeout
+      try {
+        const checkRes = await fetch(n.url, {
+          method: 'HEAD',
+          redirect: 'follow',
+          signal: AbortSignal.timeout(3000),
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; FirmableBot/1.0)'
+          }
+        });
+        
+        // Skip if clearly blocked or error
+        if (!checkRes.ok && checkRes.status >= 400) {
+          console.log(`[suggest-market-neighbors] Skipping ${n.name} - HTTP ${checkRes.status}`);
+          continue;
         }
-      })
-      .map((n: any) => {
-        try {
-          const url = new URL(n.url);
-          return {
-            name: n.name,
-            url: n.url,
-            description: n.description.substring(0, 100),
-            similarity_reason: n.similarity_reason || 'Similar offerings and market',
-            similarity_score: typeof n.similarity_score === 'number' ? n.similarity_score : 0.7,
-            tags: Array.isArray(n.tags) ? n.tags.slice(0, 4) : [],
-            favicon_url: `${url.origin}/favicon.ico`
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter((n: any) => n !== null)
-      .slice(0, 5); // Cap to 5
+      } catch (err) {
+        // Network error or timeout - skip this neighbor
+        console.log(`[suggest-market-neighbors] Skipping ${n.name} - network error`);
+        continue;
+      }
+      
+      // Add validated neighbor
+      try {
+        const url = new URL(n.url);
+        validatedNeighbors.push({
+          name: n.name,
+          url: n.url,
+          description: n.description.substring(0, 100),
+          similarity_reason: n.similarity_reason || 'Similar offerings and market',
+          similarity_score: typeof n.similarity_score === 'number' ? n.similarity_score : 0.7,
+          tags: Array.isArray(n.tags) ? n.tags.slice(0, 4) : [],
+          favicon_url: `${url.origin}/favicon.ico`
+        });
+      } catch {
+        continue;
+      }
+      
+      // Cap to 5
+      if (validatedNeighbors.length >= 5) break;
+    }
+    
+    neighbors = validatedNeighbors;
 
     console.log('[suggest-market-neighbors] Sanitized to', neighbors.length, 'neighbors');
 

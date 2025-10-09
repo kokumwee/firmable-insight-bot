@@ -208,7 +208,18 @@ export const MarketNeighbors = ({ url, onAnalyzeNeighbor }: MarketNeighborsProps
 
                 <div className="flex gap-2 pt-2">
                   <Button
-                    onClick={() => onAnalyzeNeighbor(neighbor.url)}
+                    onClick={async () => {
+                      try {
+                        await onAnalyzeNeighbor(neighbor.url);
+                      } catch (err: any) {
+                        // Handle EMPTY_SITE error specifically
+                        if (err?.message?.includes("couldn't find readable pages")) {
+                          toast.error("Couldn't analyze this neighbor (blocked or empty). Try another.");
+                        } else {
+                          toast.error("Failed to analyze neighbor. Please try again.");
+                        }
+                      }
+                    }}
                     size="sm"
                     variant="default"
                     className="flex-1"
