@@ -7,11 +7,14 @@ import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
 import { ChatSection } from "@/components/ChatSection";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
 interface Evidence {
   snippet: string;
+  source?: string;
+  offset?: number;
 }
 
 interface FieldWithConfidence {
@@ -63,77 +66,65 @@ const Index = () => {
     setErrorMessage("");
 
     try {
-      // TODO: Replace with actual API endpoint when backend is deployed
-      // Simulating API call with mock data for now
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Mock response
-      const mockData: CompanyData = {
-        name: "Acme Inc.",
-        url: url,
-        industry: {
-          value: "Software",
-          confidence: "high",
-          evidence: [{ snippet: "Acme builds cutting-edge SaaS products for enterprises." }]
-        },
-        company_size: {
-          value: "11–50",
-          confidence: "medium",
-          evidence: [{ snippet: "A small but dedicated team of experts." }]
-        },
-        hq_location: {
-          value: "San Francisco, CA",
-          confidence: "high",
-          evidence: [{ snippet: "Headquartered in the heart of San Francisco." }]
-        },
-        usp: {
-          value: "We simplify complex logistics workflows",
-          confidence: "high",
-          evidence: [{ snippet: "Our mission is to simplify logistics workflows for modern businesses." }]
-        },
-        offerings: [
-          { snippet: "Logistics automation platform" },
-          { snippet: "Real-time tracking and analytics" },
-          { snippet: "API integrations with major carriers" }
-        ],
-        target_audience: {
-          value: "Small to medium businesses",
-          confidence: "medium",
-          evidence: [{ snippet: "Helping small businesses streamline their operations." }]
-        },
-        contacts: {
-          emails: ["info@acme.com", "support@acme.com"],
-          phones: ["+1 (123) 456-7890"],
-          socials: {
-            linkedin: "https://linkedin.com/company/acme",
-            twitter: "https://twitter.com/acme",
-            facebook: "https://facebook.com/acme"
-          }
-        },
-        analyzed_at: new Date().toISOString()
-      };
+      const { data, error } = await supabase.functions.invoke('analyze', {
+        body: { url: url.trim() }
+      });
 
-      setCompanyData(mockData);
+      if (error) {
+        throw error;
+      }
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      setCompanyData(data as CompanyData);
       setState("success");
+      
+      toast({
+        title: "Analysis Complete",
+        description: "Company data has been successfully analyzed.",
+      });
       
       // Smooth scroll to results
       setTimeout(() => {
         document.getElementById("results")?.scrollIntoView({ behavior: "smooth" });
       }, 100);
     } catch (error) {
+      console.error('Analysis error:', error);
       setState("error");
-      setErrorMessage("We couldn't analyze this site. Please try again.");
+      const errorMsg = error instanceof Error ? error.message : "We couldn't analyze this site. Please try another URL.";
+      setErrorMessage(errorMsg);
+      
+      toast({
+        title: "Analysis Failed",
+        description: errorMsg,
+        variant: "destructive",
+      });
     }
   };
 
   const handleAsk = async (query: string) => {
-    // TODO: Replace with actual API endpoint when backend is deployed
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
+    if (!companyData?.url) {
+      throw new Error("No company data available");
+    }
+
+    const { data, error } = await supabase.functions.invoke('ask', {
+      body: { url: companyData.url, query }
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    if (data.error) {
+      throw new Error(data.error);
+    }
+
     return {
-      answer: `Based on the homepage, ${query} relates to their core mission of simplifying logistics workflows.`,
-      citations: [{ snippet: "Acme provides end-to-end logistics automation solutions." }],
-      guardrail: "on_homepage"
+      answer: data.answer,
+      citations: data.citations || [],
+      guardrail: data.guardrail || "on_homepage"
     };
   };
 

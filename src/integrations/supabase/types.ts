@@ -14,7 +14,105 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      chat_logs: {
+        Row: {
+          citations: Json | null
+          guardrail: string | null
+          id: string
+          role: string
+          text: string
+          ts: string | null
+          url: string
+        }
+        Insert: {
+          citations?: Json | null
+          guardrail?: string | null
+          id?: string
+          role: string
+          text: string
+          ts?: string | null
+          url: string
+        }
+        Update: {
+          citations?: Json | null
+          guardrail?: string | null
+          id?: string
+          role?: string
+          text?: string
+          ts?: string | null
+          url?: string
+        }
+        Relationships: []
+      }
+      chunks: {
+        Row: {
+          chunk_id: string
+          created_at: string | null
+          id: string
+          text: string
+          text_offset: number
+          url: string
+        }
+        Insert: {
+          chunk_id: string
+          created_at?: string | null
+          id?: string
+          text: string
+          text_offset: number
+          url: string
+        }
+        Update: {
+          chunk_id?: string
+          created_at?: string | null
+          id?: string
+          text?: string
+          text_offset?: number
+          url?: string
+        }
+        Relationships: []
+      }
+      company_cards: {
+        Row: {
+          analysis_json: Json | null
+          analyzed_at: string | null
+          company_size: Json | null
+          contacts: Json | null
+          hq_location: Json | null
+          industry: Json | null
+          name: string | null
+          offerings: Json | null
+          target_audience: Json | null
+          url: string
+          usp: Json | null
+        }
+        Insert: {
+          analysis_json?: Json | null
+          analyzed_at?: string | null
+          company_size?: Json | null
+          contacts?: Json | null
+          hq_location?: Json | null
+          industry?: Json | null
+          name?: string | null
+          offerings?: Json | null
+          target_audience?: Json | null
+          url: string
+          usp?: Json | null
+        }
+        Update: {
+          analysis_json?: Json | null
+          analyzed_at?: string | null
+          company_size?: Json | null
+          contacts?: Json | null
+          hq_location?: Json | null
+          industry?: Json | null
+          name?: string | null
+          offerings?: Json | null
+          target_audience?: Json | null
+          url?: string
+          usp?: Json | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
