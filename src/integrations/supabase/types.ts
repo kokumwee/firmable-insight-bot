@@ -49,8 +49,10 @@ export type Database = {
           chunk_id: string
           created_at: string | null
           id: string
+          page_id: string | null
           page_type: string | null
           path: string | null
+          source_url: string | null
           text: string
           text_offset: number
           url: string
@@ -59,8 +61,10 @@ export type Database = {
           chunk_id: string
           created_at?: string | null
           id?: string
+          page_id?: string | null
           page_type?: string | null
           path?: string | null
+          source_url?: string | null
           text: string
           text_offset: number
           url: string
@@ -69,13 +73,23 @@ export type Database = {
           chunk_id?: string
           created_at?: string | null
           id?: string
+          page_id?: string | null
           page_type?: string | null
           path?: string | null
+          source_url?: string | null
           text?: string
           text_offset?: number
           url?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "chunks_page_id_fkey"
+            columns: ["page_id"]
+            isOneToOne: false
+            referencedRelation: "pages"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       company_cards: {
         Row: {
@@ -119,6 +133,45 @@ export type Database = {
         }
         Relationships: []
       }
+      pages: {
+        Row: {
+          blocked: boolean | null
+          content_hash: string | null
+          content_len: number | null
+          fetched_at: string | null
+          id: string
+          origin: string
+          page_type: string
+          path: string
+          status_code: number | null
+          url: string
+        }
+        Insert: {
+          blocked?: boolean | null
+          content_hash?: string | null
+          content_len?: number | null
+          fetched_at?: string | null
+          id?: string
+          origin: string
+          page_type: string
+          path: string
+          status_code?: number | null
+          url: string
+        }
+        Update: {
+          blocked?: boolean | null
+          content_hash?: string | null
+          content_len?: number | null
+          fetched_at?: string | null
+          id?: string
+          origin?: string
+          page_type?: string
+          path?: string
+          status_code?: number | null
+          url?: string
+        }
+        Relationships: []
+      }
       unverified_suggestions: {
         Row: {
           confidence: string
@@ -146,6 +199,27 @@ export type Database = {
           rationale?: string
           suggestion?: string
           url?: string
+        }
+        Relationships: []
+      }
+      user_icp: {
+        Row: {
+          icp_json: Json
+          id: string
+          owner_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          icp_json: Json
+          id?: string
+          owner_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          icp_json?: Json
+          id?: string
+          owner_id?: string | null
+          updated_at?: string
         }
         Relationships: []
       }

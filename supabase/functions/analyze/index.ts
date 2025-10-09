@@ -2,6 +2,15 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
+// Config caps
+const CRAWL_MAX_PAGES = 250;
+const CRAWL_MAX_DEPTH = 4;
+const CRAWL_MAX_PER_SECTION = 80;
+const REQUEST_DELAY_MS = 500;
+const FETCH_TIMEOUT_MS = 15000;
+const MAX_CHUNKS_FOR_LLM = 60;
+const MIN_TEXT_LEN = 1200;
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -16,23 +25,52 @@ function normalizeUrl(input: string): string {
   try {
     const u = new URL(url);
     u.host = u.host.toLowerCase();
+    u.hash = ""; // remove fragments
     return u.toString();
   } catch {
     return url;
   }
 }
 
-async function tryRenderedFallback(_url: string): Promise<{ ok: boolean; html?: string; finalUrl?: string }> {
-  return { ok: false };
+async function fetchText(url: string, headers?: Record<string, string>): Promise<{ ok: boolean; status: number; url: string; text: string }> {
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FirmableDemo/1.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-AU,en;q=0.9",
+        ...headers
+      }
+    });
+    return { ok: res.ok, status: res.status, url: res.url, text: await res.text() };
+  } catch (err) {
+    console.error(`Fetch error for ${url}:`, err);
+    return { ok: false, status: 0, url, text: "" };
+  }
 }
 
-function canonicalSameOrigin(base: URL, href: string): URL | null {
+async function tryRobots(base: URL): Promise<string | null> {
   try {
-    const u = new URL(href, base);
-    if (u.origin !== base.origin) return null;
-    if (u.pathname === "/" && u.hash) return null; // ignore pure hash links
-    return u;
+    const r = await fetchText(new URL("/robots.txt", base).toString());
+    if (!r.ok) return null;
+    return r.text;
   } catch { return null; }
+}
+
+function allowedByRobots(robotsTxt: string | null, path: string): boolean {
+  if (!robotsTxt) return true;
+  const lines = robotsTxt.split(/\r?\n/).map(l => l.trim());
+  const disallow: string[] = [];
+  for (const line of lines) {
+    if (/^disallow:/i.test(line)) {
+      const p = line.split(":")[1]?.trim() || "";
+      if (p) disallow.push(p);
+    }
+  }
+  return !disallow.some(rule => path.startsWith(rule));
 }
 
 function classifyPath(pathname: string): string {
@@ -43,17 +81,175 @@ function classifyPath(pathname: string): string {
   if (/contact|get-in-touch|support/.test(p)) return "contact";
   if (/pricing|plans/.test(p)) return "pricing";
   if (/press|news|media|investors/.test(p)) return "press";
+  if (/blog|articles|insights|resources/.test(p)) return "blog";
+  if (/docs|documentation|developers|api/.test(p)) return "docs";
+  if (/careers|jobs|join/.test(p)) return "career";
+  if (/privacy|terms|legal/.test(p)) return "legal";
   return "other";
+}
+
+// Sitemap discovery and parsing
+async function discoverSitemap(baseUrl: URL): Promise<{ urls: string[]; via: string }> {
+  const sitemapPaths = [
+    "/sitemap.xml",
+    "/sitemap_index.xml",
+    "/sitemap.txt",
+    "/sitemap/sitemap.xml",
+    "/sitemap.xml.gz"
+  ];
+
+  for (const path of sitemapPaths) {
+    try {
+      const sitemapUrl = new URL(path, baseUrl).toString();
+      console.log(`Trying sitemap: ${sitemapUrl}`);
+      const res = await fetchText(sitemapUrl);
+      
+      if (res.ok && res.text.length > 0) {
+        // Check if it's gzipped
+        if (path.endsWith('.gz')) {
+          // Skip .gz for MVP - would need decompression library
+          continue;
+        }
+
+        // Check if it's a sitemap index
+        if (res.text.includes('<sitemapindex')) {
+          const childSitemaps = res.text.matchAll(/<loc>([^<]+)<\/loc>/gi);
+          const allUrls: string[] = [];
+          
+          for (const match of childSitemaps) {
+            const childUrl = match[1].trim();
+            if (childUrl.startsWith(baseUrl.origin)) {
+              try {
+                const childRes = await fetchText(childUrl);
+                if (childRes.ok) {
+                  const childUrls = extractUrlsFromSitemap(childRes.text, baseUrl.origin);
+                  allUrls.push(...childUrls);
+                }
+              } catch (err) {
+                console.error(`Error fetching child sitemap ${childUrl}:`, err);
+              }
+            }
+          }
+          
+          if (allUrls.length > 0) {
+            return { urls: allUrls.slice(0, CRAWL_MAX_PAGES), via: "sitemap" };
+          }
+        } else {
+          // Regular sitemap
+          const urls = extractUrlsFromSitemap(res.text, baseUrl.origin);
+          if (urls.length > 0) {
+            return { urls: urls.slice(0, CRAWL_MAX_PAGES), via: "sitemap" };
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`Error checking sitemap ${path}:`, err);
+    }
+  }
+
+  return { urls: [], via: "fallback" };
+}
+
+function extractUrlsFromSitemap(xml: string, origin: string): string[] {
+  const urls: string[] = [];
+  const locMatches = xml.matchAll(/<loc>([^<]+)<\/loc>/gi);
+  
+  for (const match of locMatches) {
+    const url = match[1].trim();
+    try {
+      const u = new URL(url);
+      if (u.origin === origin) {
+        urls.push(normalizeUrl(url));
+      }
+    } catch {
+      // Invalid URL, skip
+    }
+  }
+  
+  return [...new Set(urls)]; // dedupe
+}
+
+// BFS crawl fallback
+async function bfsCrawl(baseUrl: URL, robotsTxt: string | null): Promise<string[]> {
+  const visited = new Set<string>([baseUrl.pathname]);
+  const queue: Array<{ url: URL; depth: number }> = [{ url: baseUrl, depth: 0 }];
+  const result: string[] = [baseUrl.toString()];
+  
+  console.log("Starting BFS fallback crawl...");
+
+  while (queue.length > 0 && result.length < CRAWL_MAX_PAGES) {
+    const { url, depth } = queue.shift()!;
+    
+    if (depth >= CRAWL_MAX_DEPTH) continue;
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
+      const res = await fetchText(url.toString());
+      
+      if (!res.ok) continue;
+
+      // Extract links
+      const linkMatches = res.text.matchAll(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi);
+      const candidates: Array<{ url: URL; text: string; score: number }> = [];
+
+      for (const match of linkMatches) {
+        const href = match[1];
+        const anchorText = match[2];
+        
+        try {
+          const candidateUrl = new URL(href, url);
+          if (candidateUrl.origin !== baseUrl.origin) continue;
+          if (visited.has(candidateUrl.pathname)) continue;
+          if (!allowedByRobots(robotsTxt, candidateUrl.pathname)) continue;
+          
+          // Skip unwanted paths
+          if (/\.(pdf|docx?|zip|jpg|jpeg|png|svg|mp4|webm)(\?|$)/i.test(candidateUrl.pathname)) continue;
+          if (/login|cart|checkout|search/.test(candidateUrl.pathname)) continue;
+
+          const score = scoreLink(anchorText, candidateUrl.pathname);
+          if (score > -5) {
+            candidates.push({ url: candidateUrl, text: anchorText, score });
+          }
+        } catch {
+          // Invalid URL, skip
+        }
+      }
+
+      // Sort by score and add to queue
+      candidates.sort((a, b) => b.score - a.score);
+      for (const candidate of candidates.slice(0, 10)) {
+        if (!visited.has(candidate.url.pathname)) {
+          visited.add(candidate.url.pathname);
+          queue.push({ url: candidate.url, depth: depth + 1 });
+          result.push(candidate.url.toString());
+          
+          if (result.length >= CRAWL_MAX_PAGES) break;
+        }
+      }
+    } catch (err) {
+      console.error(`BFS error for ${url}:`, err);
+    }
+  }
+
+  return result;
 }
 
 function scoreLink(anchorText: string, pathname: string): number {
   const t = (anchorText || "").toLowerCase();
   const p = (pathname || "").toLowerCase();
   let s = 0;
-  if (/about|about-us|company|who-we-are|team|leadership|contact|pricing|press|media|investors/.test(t+p)) s += 5;
+  
+  // Prioritize important sections
+  if (/about|company|who-we-are|team|leadership|contact|pricing|press|media|investors/.test(t + p)) s += 5;
+  if (/about|company/.test(p)) s += 3;
+  if (/team|leadership/.test(p)) s += 3;
+  
+  // Prefer shorter paths
   if ((p.match(/\//g) || []).length <= 2) s += 2;
+  
+  // Penalize
   if (/login|cart|checkout|privacy|terms/.test(p)) s -= 5;
-  if (/\.(pdf|docx?|zip|jpg|jpeg|png|svg|mp4|webm)(\?|$)/i.test(p)) s -= 999;
+  
   return s;
 }
 
@@ -61,14 +257,12 @@ async function robustFetch(url: string) {
   let res = await fetch(url, {
     method: "GET",
     redirect: "follow",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "Accept-Language": "en-AU,en;q=0.9",
       "Cache-Control": "no-cache",
-      "Pragma": "no-cache",
-      "Upgrade-Insecure-Requests": "1",
-      "Referer": "https://www.google.com/"
     }
   });
 
@@ -76,64 +270,221 @@ async function robustFetch(url: string) {
     res = await fetch(url, {
       method: "GET",
       redirect: "follow",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
         "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-AU,en;q=0.9",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Referer": "https://www.google.com/"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       }
     });
   }
 
-  let body = await res.text();
-  const finalUrl = res.url;
-
-  const looksBlocked =
-    !res.ok ||
-    res.status >= 400 ||
-    body.length < 2500 ||
-    /access\s*denied|enable\s*javascript|cloudflare|akamai|attention\s*required/i.test(body);
+  const body = await res.text();
+  const looksBlocked = !res.ok || res.status >= 400 || body.length < 2500 ||
+    /access\s*denied|enable\s*javascript|cloudflare/i.test(body);
 
   if (looksBlocked) {
-    const rendered = await tryRenderedFallback(finalUrl);
-    if (rendered?.ok && rendered.html && rendered.html.length > 2500) {
-      return { ok: true, html: rendered.html, finalUrl: rendered.finalUrl || finalUrl, source: "rendered" };
-    }
     return {
       ok: false,
       code: res.status >= 400 ? `HTTP_${res.status}` : "BLOCKED_OR_EMPTY",
-      message: "This site appears to block automated reads or requires JavaScript rendering.",
-      snippet: body.slice(0, 1200),
-      finalUrl
+      message: "Site blocked or requires JavaScript",
     };
   }
 
-  return { ok: true, html: body, finalUrl, source: "direct" };
+  return { ok: true, html: body, finalUrl: res.url };
 }
 
-function isLikelyEmptyHomepage(html: string): boolean {
-  const text = html.replace(/<script[\s\S]*?<\/script>/gi, "")
-                   .replace(/<style[\s\S]*?<\/style>/gi, "")
-                   .replace(/<[^>]+>/g, " ")
-                   .replace(/\s+/g, " ")
-                   .trim();
-  return text.length < 1200;
+// Main crawl function
+async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; chunks: any[]; truncated: boolean }> {
+  const startTime = Date.now();
+  const MAX_CRAWL_TIME = 90000; // 90 seconds
+  
+  const normalizedUrl = normalizeUrl(url);
+  const baseUrl = new URL(normalizedUrl);
+  
+  console.log("Loading robots.txt...");
+  const robotsTxt = await tryRobots(baseUrl);
+  
+  console.log("Discovering sitemap...");
+  const { urls, via } = await discoverSitemap(baseUrl);
+  
+  let urlList: string[];
+  if (urls.length > 0) {
+    console.log(`Found ${urls.length} URLs via sitemap`);
+    urlList = urls;
+  } else {
+    console.log("No sitemap found, using BFS fallback");
+    urlList = await bfsCrawl(baseUrl, robotsTxt);
+    console.log(`BFS found ${urlList.length} URLs`);
+  }
+
+  // Track per-section counts
+  const sectionCounts: Record<string, number> = {};
+  const pages: any[] = [];
+  const chunks: any[] = [];
+  let chunkIndex = 0;
+  let truncated = false;
+
+  console.log(`Crawling ${urlList.length} pages...`);
+
+  for (let i = 0; i < urlList.length; i++) {
+    if (Date.now() - startTime > MAX_CRAWL_TIME) {
+      console.log("Time limit reached, truncating");
+      truncated = true;
+      break;
+    }
+
+    const pageUrl = urlList[i];
+    const pageUrlObj = new URL(pageUrl);
+    const pageType = classifyPath(pageUrlObj.pathname);
+
+    // Check section cap
+    if (sectionCounts[pageType] >= CRAWL_MAX_PER_SECTION) {
+      console.log(`Skipping ${pageUrl} - section ${pageType} cap reached`);
+      continue;
+    }
+
+    try {
+      // Polite delay
+      if (i > 0) await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
+
+      const fetchResult = await robustFetch(pageUrl);
+      
+      if (!fetchResult.ok) {
+        // Store as blocked
+        await supabase.from('pages').upsert({
+          url: pageUrl,
+          origin: baseUrl.origin,
+          path: pageUrlObj.pathname,
+          page_type: pageType,
+          status_code: 0,
+          blocked: true,
+          content_len: 0
+        });
+        continue;
+      }
+
+      // Clean HTML
+      let cleanedHtml = fetchResult.html!.replace(/<script[\s\S]*?<\/script>/gi, '');
+      cleanedHtml = cleanedHtml.replace(/<style[\s\S]*?<\/style>/gi, '');
+      cleanedHtml = cleanedHtml.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+      const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+      if (textContent.length < MIN_TEXT_LEN) {
+        console.log(`Skipping ${pageUrl} - too short`);
+        continue;
+      }
+
+      // Calculate hash
+      const encoder = new TextEncoder();
+      const data = encoder.encode(textContent);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const contentHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+      // Store page
+      const { data: pageData, error: pageError } = await supabase.from('pages').upsert({
+        url: pageUrl,
+        origin: baseUrl.origin,
+        path: pageUrlObj.pathname,
+        page_type: pageType,
+        status_code: 200,
+        content_hash: contentHash,
+        content_len: textContent.length,
+        blocked: false
+      }).select().single();
+
+      if (pageError) {
+        console.error("Error storing page:", pageError);
+        continue;
+      }
+
+      pages.push(pageData);
+      sectionCounts[pageType] = (sectionCounts[pageType] || 0) + 1;
+
+      // Chunk text
+      const chunkSize = 750;
+      let offset = 0;
+      while (offset < textContent.length) {
+        const chunkText = textContent.slice(offset, offset + chunkSize);
+        chunks.push({
+          page_id: pageData.id,
+          url: normalizedUrl,
+          chunk_id: `c${chunkIndex + 1}`,
+          text: chunkText,
+          text_offset: offset,
+          source_url: pageUrl,
+          path: pageUrlObj.pathname,
+          page_type: pageType
+        });
+        offset += chunkSize;
+        chunkIndex++;
+      }
+
+      console.log(`Crawled ${i + 1}/${urlList.length}: ${pageUrl} (${pageType})`);
+
+    } catch (err) {
+      console.error(`Error crawling ${pageUrl}:`, err);
+    }
+  }
+
+  return { pages, chunks, truncated };
 }
 
+// Select best chunks for LLM
+function selectBestChunks(chunks: any[], maxChunks: number): any[] {
+  const keywords = [
+    "industry", "customers", "pricing", "team", "about", "mission",
+    "headquarters", "hq", "location", "employees", "subscription",
+    "billing", "identity", "compliance", "founded", "leader"
+  ];
+
+  const scored = chunks.map(chunk => {
+    let score = 0;
+    
+    // Page type scoring
+    if (["about", "company", "team", "contact", "pricing", "press"].includes(chunk.page_type)) score += 5;
+    if (chunk.page_type === "homepage") score += 3;
+    if (["legal", "privacy", "terms"].includes(chunk.page_type)) score -= 2;
+    
+    // Keyword scoring
+    const text = chunk.text.toLowerCase();
+    for (const kw of keywords) {
+      if (text.includes(kw)) score += 1;
+    }
+    
+    return { chunk, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Limit chunks per page type for diversity
+  const typeCount: Record<string, number> = {};
+  const selected: any[] = [];
+
+  for (const { chunk } of scored) {
+    if (selected.length >= maxChunks) break;
+    
+    const count = typeCount[chunk.page_type] || 0;
+    if (count >= 20) continue;
+    
+    selected.push(chunk);
+    typeCount[chunk.page_type] = count + 1;
+  }
+
+  return selected;
+}
+
+// Helper functions for data transformation
 function toShortBulletsFromOfferings(aiOfferings: string[], maxWords = 12): string[] {
   const bullets = aiOfferings
     .map(s => (s || "").replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .map(s => {
-      s = s.replace(/\b(\w+)\s+\1\b/gi, "$1");
       const words = s.split(" ");
       const trimmed = words.slice(0, maxWords).join(" ");
-      const sentence = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-      return sentence.replace(/[.;,:-]+$/,"");
+      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).replace(/[.;,:-]+$/, "");
     });
-  const seen = new Set(); 
+  const seen = new Set();
   return bullets.filter(b => (seen.has(b.toLowerCase()) ? false : (seen.add(b.toLowerCase()), true)));
 }
 
@@ -149,7 +500,7 @@ function sanitizeSocial(raw: string | null): { url: string | null; is_valid: boo
   try {
     const u = new URL(url);
     const host = u.hostname.toLowerCase();
-    const allowed = ["linkedin.com","www.linkedin.com","twitter.com","x.com","www.twitter.com","www.x.com","facebook.com","www.facebook.com","instagram.com","www.instagram.com"];
+    const allowed = ["linkedin.com", "www.linkedin.com", "twitter.com", "x.com", "www.twitter.com", "www.x.com", "facebook.com", "www.facebook.com", "instagram.com", "www.instagram.com"];
     if (!allowed.includes(host)) return { url: u.toString(), is_valid: false, note: "untrusted_host" };
     if (host === "x.com" || host === "www.x.com") { u.hostname = "twitter.com"; }
     if (u.pathname === "/" || u.pathname === "") {
@@ -169,17 +520,17 @@ serve(async (req) => {
 
   try {
     const { url } = await req.json();
-    
+
     if (!url || typeof url !== 'string') {
-      return new Response(JSON.stringify({ 
-        ok: false, 
+      return new Response(JSON.stringify({
+        ok: false,
         error: { code: 'INVALID_URL', message: 'Invalid URL provided' }
       }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    
+
     const normalizedUrl = normalizeUrl(url);
     console.log('Analyzing URL:', normalizedUrl);
 
@@ -187,15 +538,16 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    console.log('Fetching HTML...');
-    const fetchResult = await robustFetch(normalizedUrl);
+    // Stage 1: Crawl site
+    console.log('Stage: Crawling site...');
+    const { pages, chunks, truncated } = await crawlSite(normalizedUrl, supabase);
 
-    if (!fetchResult.ok) {
-      return new Response(JSON.stringify({ 
-        ok: false, 
-        error: { 
-          code: fetchResult.code, 
-          message: fetchResult.message 
+    if (pages.length === 0 || chunks.length === 0) {
+      return new Response(JSON.stringify({
+        ok: false,
+        error: {
+          code: 'EMPTY_SITE',
+          message: "We couldn't find readable pages on this site."
         }
       }), {
         status: 200,
@@ -203,171 +555,35 @@ serve(async (req) => {
       });
     }
 
-    const html = fetchResult.html!;
-    
-    if (isLikelyEmptyHomepage(html)) {
-      return new Response(JSON.stringify({ 
-        ok: false, 
-        error: { 
-          code: 'EMPTY_CONTENT', 
-          message: "We couldn't read this homepage (likely JS-only or blocked)." 
-        }
-      }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    console.log(`Crawled ${pages.length} pages, created ${chunks.length} chunks`);
 
-    console.log('Parsing...');
-    let cleanedHtml = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/\s+/g, ' ').trim();
+    // Stage 2: Select best chunks
+    const selectedChunks = selectBestChunks(chunks, MAX_CHUNKS_FOR_LLM);
+    console.log(`Selected ${selectedChunks.length} chunks for extraction`);
 
-    const titleMatch = cleanedHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
-    const h1Match = cleanedHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i);
-    const extractedName = titleMatch?.[1] || h1Match?.[1] || null;
-
-    const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-    // Crawl additional pages
-    console.log('Crawling additional pages...');
-    const CRAWL_ENABLED = Deno.env.get('CRAWL_ENABLED') !== 'false';
-    const CRAWL_MAX_PAGES = parseInt(Deno.env.get('CRAWL_MAX_PAGES') || '3');
-    const baseUrl = new URL(fetchResult.finalUrl);
-    
-    interface PageData {
-      url: string;
-      path: string;
-      page_type: string;
-      text: string;
-    }
-    
-    const allPages: PageData[] = [{
-      url: baseUrl.toString(),
-      path: baseUrl.pathname,
-      page_type: classifyPath(baseUrl.pathname),
-      text: textContent
-    }];
-
-    if (CRAWL_ENABLED && CRAWL_MAX_PAGES > 0) {
-      const startTime = Date.now();
-      const MAX_CRAWL_TIME = 8000; // 8 seconds max
-
-      // Parse anchors from homepage
-      const anchorRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
-      const candidates: Array<{ url: URL; text: string; score: number }> = [];
-      
-      let match;
-      while ((match = anchorRegex.exec(cleanedHtml)) !== null) {
-        const href = match[1];
-        const anchorText = match[2];
-        const candidateUrl = canonicalSameOrigin(baseUrl, href);
-        
-        if (candidateUrl && candidateUrl.pathname !== baseUrl.pathname) {
-          const score = scoreLink(anchorText, candidateUrl.pathname);
-          if (score > -5) {
-            candidates.push({ url: candidateUrl, text: anchorText, score });
-          }
-        }
-      }
-
-      // Sort by score and deduplicate by pathname
-      candidates.sort((a, b) => b.score - a.score);
-      const seenPaths = new Set([baseUrl.pathname]);
-      const topCandidates = candidates.filter(c => {
-        if (seenPaths.has(c.url.pathname)) return false;
-        seenPaths.add(c.url.pathname);
-        return true;
-      }).slice(0, CRAWL_MAX_PAGES);
-
-      console.log(`Found ${topCandidates.length} pages to crawl`);
-
-      // Crawl each page with throttling
-      for (const candidate of topCandidates) {
-        if (Date.now() - startTime > MAX_CRAWL_TIME) {
-          console.log('Crawl time limit reached');
-          break;
-        }
-
-        try {
-          // Throttle: wait 600ms between requests
-          await new Promise(resolve => setTimeout(resolve, 600));
-          
-          const crawlResult = await robustFetch(candidate.url.toString());
-          
-          if (crawlResult.ok && !isLikelyEmptyHomepage(crawlResult.html!)) {
-            let crawlCleanedHtml = crawlResult.html!.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-            crawlCleanedHtml = crawlCleanedHtml.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-            crawlCleanedHtml = crawlCleanedHtml.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
-            const crawlText = crawlCleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-            
-            allPages.push({
-              url: candidate.url.toString(),
-              path: candidate.url.pathname,
-              page_type: classifyPath(candidate.url.pathname),
-              text: crawlText
-            });
-            
-            console.log(`Crawled ${candidate.url.pathname} (${classifyPath(candidate.url.pathname)})`);
-          }
-        } catch (err) {
-          console.error(`Failed to crawl ${candidate.url.pathname}:`, err);
-          // Continue with other pages
-        }
-      }
-    }
-
-    console.log('Extracting...');
-    // Create chunks from all pages (700-800 chars each)
-    const chunks: Array<{ chunk_id: string; text: string; offset: number; source_url: string; page_type: string }> = [];
-    const chunkSize = 750;
-    let chunkIndex = 0;
-
-    for (const page of allPages) {
-      let offset = 0;
-      while (offset < page.text.length) {
-        const chunkText = page.text.slice(offset, offset + chunkSize);
-        chunks.push({
-          chunk_id: `c${chunkIndex + 1}`,
-          text: chunkText,
-          offset,
-          source_url: page.url,
-          page_type: page.page_type
-        });
-        offset += chunkSize;
-        chunkIndex++;
-      }
-    }
-
-    console.log(`Created ${chunks.length} chunks from ${allPages.length} pages`);
-
-    // Extract contacts
+    // Stage 3: Extract contacts
+    console.log('Stage: Extracting contacts...');
     const emails = new Set<string>();
     const phones = new Set<string>();
-    const socials: { linkedin: string | null; twitter: string | null; facebook: string | null; instagram: string | null } = { 
-      linkedin: null, 
-      twitter: null, 
-      facebook: null, 
-      instagram: null 
+    const socials: { linkedin: string | null; twitter: string | null; facebook: string | null; instagram: string | null } = {
+      linkedin: null,
+      twitter: null,
+      facebook: null,
+      instagram: null
     };
 
+    // Extract from homepage chunks
+    const homepageChunks = chunks.filter(c => c.page_type === "homepage");
+    const homepageText = homepageChunks.map(c => c.text).join(" ");
+
     // Extract emails
-    const mailtoMatches = cleanedHtml.matchAll(/mailto:([^\s"'<>]+)/gi);
-    for (const match of mailtoMatches) {
-      emails.add(match[1].toLowerCase());
-    }
-    const emailMatches = textContent.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g);
+    const emailMatches = homepageText.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g);
     for (const match of emailMatches) {
       emails.add(match[0].toLowerCase());
     }
 
     // Extract phones
-    const telMatches = cleanedHtml.matchAll(/tel:([^\s"'<>]+)/gi);
-    for (const match of telMatches) {
-      phones.add(match[1]);
-    }
-    const phoneMatches = textContent.matchAll(/[\+\(]?[1-9][\d\s\-\(\)\.]{7,}\d/g);
+    const phoneMatches = homepageText.matchAll(/[\+\(]?[1-9][\d\s\-\(\)\.]{7,}\d/g);
     for (const match of phoneMatches) {
       const cleaned = match[0].replace(/\s+/g, '');
       if (cleaned.length >= 10) {
@@ -376,18 +592,19 @@ serve(async (req) => {
     }
 
     // Extract social links
-    const linkMatches = cleanedHtml.matchAll(/href=["']([^"']+)["']/gi);
+    const linkMatches = homepageText.matchAll(/https?:\/\/[^\s"'<>]+/gi);
     for (const match of linkMatches) {
-      const href = match[1].toLowerCase();
-      if (href.includes('linkedin.com')) socials.linkedin = match[1];
-      else if (href.includes('twitter.com') || href.includes('x.com')) socials.twitter = match[1];
-      else if (href.includes('facebook.com')) socials.facebook = match[1];
-      else if (href.includes('instagram.com')) socials.instagram = match[1];
+      const href = match[0].toLowerCase();
+      if (href.includes('linkedin.com') && !socials.linkedin) socials.linkedin = match[0];
+      else if ((href.includes('twitter.com') || href.includes('x.com')) && !socials.twitter) socials.twitter = match[0];
+      else if (href.includes('facebook.com') && !socials.facebook) socials.facebook = match[0];
+      else if (href.includes('instagram.com') && !socials.instagram) socials.instagram = match[0];
     }
 
-    console.log('Summarising...');
+    // Stage 4: AI extraction
+    console.log('Stage: AI extraction...');
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    
+
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -399,11 +616,11 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You extract company info from provided text chunks that may come from the homepage and other key pages (about/company/team/contact/pricing/press). Prefer facts from about/company pages for company size, HQ, and leadership. If uncertain, set value=null and confidence="low". For each non-null value add 1-2 evidence snippets (≤180 chars) with source_url and page_type. Return ONLY valid JSON, no commentary.'
+            content: 'You extract company info from text chunks that may come from any page (homepage, about, company, team, contact, pricing, press, docs, blog). Prefer facts from about/company pages for size, HQ, leadership. Return ONLY valid JSON, no commentary.'
           },
           {
             role: 'user',
-            content: `URL: ${normalizedUrl}\n\nExtracted title/h1: ${extractedName}\n\nChunks (from multiple pages):\n${JSON.stringify(chunks.slice(0, 12).map(c => ({ chunk_id: c.chunk_id, text: c.text, offset: c.offset, source_url: c.source_url, page_type: c.page_type })))}\n\nExtract and return JSON with this exact schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words, productized, sentence-case, deduplicated)","details":"1-2 sentence description (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}\n\nFor offerings_raw: return 5-10 short, productized phrases (≤12 words each), sentence-case, no brand repetition. Each with a brief 1-2 sentence description and source information.\nFor target_audience_raw: return a list of short bullets (≤12 words each), each representing a distinct audience segment.\nWhen producing evidence, include the exact snippet, source_url (absolute URL), page_type, and offset from the chunks provided.`
+            content: `URL: ${normalizedUrl}\n\nChunks (from ${pages.length} pages):\n${JSON.stringify(selectedChunks.slice(0, 20).map(c => ({ chunk_id: c.chunk_id, text: c.text, source_url: c.source_url, page_type: c.page_type })))}\n\nExtract and return JSON:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)"]\n}`
           }
         ],
         temperature: 0.3
@@ -418,19 +635,14 @@ serve(async (req) => {
 
     const aiData = await aiResponse.json();
     let extractedData;
-    
+
     try {
       const content = aiData.choices[0].message.content;
-      // Try to parse JSON from the content
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        extractedData = JSON.parse(jsonMatch[0]);
-      } else {
-        extractedData = JSON.parse(content);
-      }
+      extractedData = JSON.parse(jsonMatch ? jsonMatch[0] : content);
     } catch (parseError) {
-      console.error('Failed to parse AI response:', aiData.choices[0].message.content);
-      // Retry with stricter instruction
+      console.error('Failed to parse AI response, retrying...');
+      // Simple retry logic
       const retryResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -442,17 +654,17 @@ serve(async (req) => {
           messages: [
             {
               role: 'system',
-              content: 'You returned invalid JSON. Return only valid JSON that matches the schema exactly. No commentary, no markdown, just raw JSON.'
+              content: 'Return ONLY valid JSON, no markdown, no commentary.'
             },
             {
               role: 'user',
-              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching this schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}`
+              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching the schema.`
             }
           ],
           temperature: 0.1
         })
       });
-      
+
       const retryData = await retryResponse.json();
       const retryContent = retryData.choices[0].message.content;
       const retryMatch = retryContent.match(/\{[\s\S]*\}/);
@@ -469,11 +681,11 @@ serve(async (req) => {
       return {
         bullet,
         details: compressDetails(rawItem.details || bullet, 180),
-        evidence: rawItem.evidence || (rawItem.snippet ? [{ 
-          snippet: rawItem.snippet, 
-          source_url: rawItem.source_url || normalizedUrl, 
+        evidence: rawItem.evidence || (rawItem.snippet ? [{
+          snippet: rawItem.snippet,
+          source_url: rawItem.source_url || normalizedUrl,
           page_type: rawItem.page_type || "homepage",
-          offset: rawItem.offset || 0 
+          offset: rawItem.offset || 0
         }] : [])
       };
     });
@@ -493,7 +705,7 @@ serve(async (req) => {
     // Build CompanyCard
     const analyzed_at = new Date().toISOString();
     const companyCard = {
-      name: extractedData.name || extractedName,
+      name: extractedData.name || new URL(normalizedUrl).hostname,
       url: normalizedUrl,
       industry: extractedData.industry || { value: null, confidence: 'low', evidence: [] },
       company_size: extractedData.company_size || { value: null, confidence: 'low', evidence: [] },
@@ -511,21 +723,23 @@ serve(async (req) => {
       analyzed_at
     };
 
-    console.log('Persisting to database...');
-    
+    console.log('Stage: Persisting to database...');
+
     // Delete old chunks
     await supabase.from('chunks').delete().eq('url', normalizedUrl);
 
     // Insert new chunks
     const chunksToInsert = chunks.map(chunk => ({
+      page_id: chunk.page_id,
       url: normalizedUrl,
       chunk_id: chunk.chunk_id,
       text: chunk.text,
-      text_offset: chunk.offset,
-      path: new URL(chunk.source_url).pathname,
+      text_offset: chunk.text_offset,
+      source_url: chunk.source_url,
+      path: chunk.path,
       page_type: chunk.page_type
     }));
-    
+
     const { error: chunksError } = await supabase.from('chunks').insert(chunksToInsert);
     if (chunksError) {
       console.error('Error inserting chunks:', chunksError);
@@ -556,7 +770,15 @@ serve(async (req) => {
     }
 
     console.log('Analysis complete');
-    return new Response(JSON.stringify({ ok: true, data: companyCard }), {
+    return new Response(JSON.stringify({
+      ok: true,
+      data: companyCard,
+      crawl: {
+        total_pages: pages.length,
+        total_chunks: chunks.length,
+        truncated
+      }
+    }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
@@ -564,13 +786,13 @@ serve(async (req) => {
     console.error('Error in analyze function:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to analyze website. Please try another URL.';
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         ok: false,
         error: {
           code: 'INTERNAL_ERROR',
           message: errorMessage
         }
-      }), 
+      }),
       {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

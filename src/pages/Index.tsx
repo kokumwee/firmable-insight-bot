@@ -50,6 +50,7 @@ const Index = () => {
   const [state, setState] = useState<AppState>("idle");
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
   const { toast } = useToast();
 
   const handleAnalyze = async () => {
@@ -64,11 +65,29 @@ const Index = () => {
 
     setState("loading");
     setErrorMessage("");
+    setCrawlProgress({ stage: "discovering", current: 0, total: 0 });
 
     try {
+      // Simulate progress updates (in production, this would be real-time via websockets)
+      const progressInterval = setInterval(() => {
+        setCrawlProgress(prev => {
+          if (!prev) return null;
+          if (prev.stage === "discovering") {
+            return { stage: "crawling", current: 0, total: 50 };
+          } else if (prev.stage === "crawling" && prev.current < prev.total) {
+            return { ...prev, current: prev.current + 5 };
+          } else if (prev.stage === "crawling") {
+            return { stage: "extracting", current: 0, total: 0 };
+          }
+          return prev;
+        });
+      }, 1000);
+
       const { data, error } = await supabase.functions.invoke('analyze', {
         body: { url: url.trim() }
       });
+
+      clearInterval(progressInterval);
 
       if (error) {
         throw error;
@@ -178,7 +197,7 @@ const Index = () => {
         </div>
 
         {/* Loading State */}
-        {state === "loading" && <LoadingSteps />}
+        {state === "loading" && <LoadingSteps progress={crawlProgress} />}
 
         {/* Error State */}
         {state === "error" && (
