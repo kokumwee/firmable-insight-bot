@@ -5,7 +5,6 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
-import { MarketNeighbors } from "@/components/MarketNeighbors";
 import { ChatSection } from "@/components/ChatSection";
 import { EngagementInsights } from "@/components/EngagementInsights";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -312,7 +311,6 @@ const Index = () => {
               </TabsList>
               <TabsContent value="insights" className="space-y-8">
                 <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
-                <MarketNeighbors url={companyData.url} />
               </TabsContent>
               <TabsContent value="engagement">
                 <EngagementInsights url={companyData.url} />
