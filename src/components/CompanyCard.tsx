@@ -1,12 +1,29 @@
-import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone, Linkedin, Twitter, Facebook, Instagram } from "lucide-react";
+import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone, Linkedin, Twitter, Facebook, Instagram, Info, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ConfidenceBadge, ConfidenceLevel } from "./ConfidenceBadge";
 import { EvidencePopover } from "./EvidencePopover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
 
 interface Evidence {
   snippet: string;
+  source?: string;
+  offset?: number;
+}
+
+interface OfferingBulleted {
+  bullet: string;
+  details: string;
+  evidence: Evidence[];
+}
+
+interface SanitizedSocial {
+  url: string | null;
+  is_valid: boolean;
+  note: string;
 }
 
 interface FieldWithConfidence {
@@ -22,16 +39,18 @@ interface CompanyData {
   company_size: FieldWithConfidence;
   hq_location: FieldWithConfidence;
   usp: FieldWithConfidence;
-  offerings: Evidence[];
+  offerings?: Evidence[];
+  offerings_bulleted?: OfferingBulleted[];
   target_audience: FieldWithConfidence;
+  target_audience_list?: string[];
   contacts: {
     emails: string[];
     phones: string[];
     socials: {
-      linkedin?: string;
-      twitter?: string;
-      facebook?: string;
-      instagram?: string;
+      linkedin?: string | SanitizedSocial;
+      twitter?: string | SanitizedSocial;
+      facebook?: string | SanitizedSocial;
+      instagram?: string | SanitizedSocial;
     };
   };
   analyzed_at: string;
@@ -43,6 +62,8 @@ interface CompanyCardProps {
 }
 
 export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
+  const { toast } = useToast();
+  
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
@@ -52,6 +73,21 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
     twitter: Twitter,
     facebook: Facebook,
     instagram: Instagram,
+  };
+
+  const copySocialLink = (url: string | null, platform: string) => {
+    if (!url) return;
+    navigator.clipboard.writeText(url);
+    toast({
+      title: "Copied!",
+      description: `${platform} link copied to clipboard`,
+    });
+  };
+
+  const getSocialData = (social: string | SanitizedSocial | undefined): SanitizedSocial => {
+    if (!social) return { url: null, is_valid: false, note: "missing" };
+    if (typeof social === "string") return { url: social, is_valid: true, note: "ok" };
+    return social;
   };
 
   return (
@@ -142,28 +178,77 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
         {/* Offerings */}
         <div className="space-y-2">
           <p className="text-sm font-medium text-muted-foreground">Offerings / Services</p>
-          <ul className="list-disc list-inside space-y-1">
-            {data.offerings.map((offering, idx) => (
-              <li key={idx} className="text-base">{offering.snippet}</li>
-            ))}
-          </ul>
+          {data.offerings_bulleted && data.offerings_bulleted.length > 0 ? (
+            <ul className="space-y-2">
+              {data.offerings_bulleted.map((offering, idx) => (
+                <li key={idx} className="flex items-start gap-2">
+                  <span className="text-base">• {offering.bullet}</span>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-5 px-1 text-muted-foreground hover:text-foreground">
+                        <Info className="h-3 w-3" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-80">
+                      <div className="space-y-2">
+                        <h4 className="font-semibold text-sm">Details</h4>
+                        <p className="text-sm text-muted-foreground">{offering.details}</p>
+                        {offering.evidence.length > 0 && (
+                          <>
+                            <h4 className="font-semibold text-sm mt-3">Evidence</h4>
+                            <div className="space-y-2">
+                              {offering.evidence.map((ev, evidx) => (
+                                <p key={evidx} className="text-sm text-muted-foreground italic border-l-2 border-primary pl-3">
+                                  "{ev.snippet}"
+                                </p>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </li>
+              ))}
+            </ul>
+          ) : data.offerings && data.offerings.length > 0 ? (
+            <ul className="list-disc list-inside space-y-1">
+              {data.offerings.map((offering, idx) => (
+                <li key={idx} className="text-base">{offering.snippet}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">No details available.</p>
+          )}
         </div>
 
         <Separator />
 
         {/* Target Audience */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <Target className="h-5 w-5 text-muted-foreground" />
-            <div>
+        <div className="space-y-2">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <Target className="h-5 w-5 text-muted-foreground" />
               <p className="text-sm font-medium text-muted-foreground">Target Audience</p>
-              <p className="text-base font-semibold">{data.target_audience.value}</p>
             </div>
+            {data.target_audience && (
+              <div className="flex items-center gap-2">
+                <ConfidenceBadge level={data.target_audience.confidence} />
+                <EvidencePopover evidence={data.target_audience.evidence} />
+              </div>
+            )}
           </div>
-          <div className="flex items-center gap-2">
-            <ConfidenceBadge level={data.target_audience.confidence} />
-            <EvidencePopover evidence={data.target_audience.evidence} />
-          </div>
+          {data.target_audience_list && data.target_audience_list.length > 0 ? (
+            <ul className="list-disc list-inside space-y-1">
+              {data.target_audience_list.map((audience, idx) => (
+                <li key={idx} className="text-base">{audience}</li>
+              ))}
+            </ul>
+          ) : data.target_audience?.value ? (
+            <p className="text-base font-semibold">{data.target_audience.value}</p>
+          ) : (
+            <p className="text-sm text-muted-foreground">No details available.</p>
+          )}
         </div>
 
         <Separator />
@@ -202,23 +287,55 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
 
           {/* Social Links */}
           {Object.keys(data.contacts.socials).length > 0 && (
-            <div className="flex items-center gap-3 flex-wrap">
-              {Object.entries(data.contacts.socials).map(([platform, url]) => {
-                const Icon = socialIcons[platform as keyof typeof socialIcons];
-                return (
-                  <a
-                    key={platform}
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-sm text-primary hover:underline"
-                  >
-                    <Icon className="h-4 w-4" />
-                    {platform.charAt(0).toUpperCase() + platform.slice(1)}
-                  </a>
-                );
-              })}
-            </div>
+            <TooltipProvider>
+              <div className="flex items-center gap-3 flex-wrap">
+                {Object.entries(data.contacts.socials).map(([platform, rawSocial]) => {
+                  const Icon = socialIcons[platform as keyof typeof socialIcons];
+                  const social = getSocialData(rawSocial);
+                  const showLoginWarning = social.note === "may_require_login";
+                  
+                  return (
+                    <div key={platform} className="flex items-center gap-1">
+                      {social.is_valid && social.url ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <a
+                              href={social.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 text-sm text-primary hover:underline"
+                            >
+                              <Icon className="h-4 w-4" />
+                              {platform.charAt(0).toUpperCase() + platform.slice(1)}
+                            </a>
+                          </TooltipTrigger>
+                          {showLoginWarning && (
+                            <TooltipContent>
+                              <p>May require login</p>
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      ) : social.url ? (
+                        <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Icon className="h-4 w-4" />
+                          {platform.charAt(0).toUpperCase() + platform.slice(1)}
+                        </span>
+                      ) : null}
+                      {social.url && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-5 w-5 p-0"
+                          onClick={() => copySocialLink(social.url, platform)}
+                        >
+                          <Copy className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </TooltipProvider>
           )}
         </div>
       </CardContent>

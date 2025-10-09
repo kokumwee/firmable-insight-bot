@@ -91,6 +91,46 @@ function isLikelyEmptyHomepage(html: string): boolean {
   return text.length < 1200;
 }
 
+function toShortBulletsFromOfferings(aiOfferings: string[], maxWords = 12): string[] {
+  const bullets = aiOfferings
+    .map(s => (s || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .map(s => {
+      s = s.replace(/\b(\w+)\s+\1\b/gi, "$1");
+      const words = s.split(" ");
+      const trimmed = words.slice(0, maxWords).join(" ");
+      const sentence = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+      return sentence.replace(/[.;,:-]+$/,"");
+    });
+  const seen = new Set(); 
+  return bullets.filter(b => (seen.has(b.toLowerCase()) ? false : (seen.add(b.toLowerCase()), true)));
+}
+
+function compressDetails(text: string, maxLen = 180): string {
+  const t = (text || "").replace(/\s+/g, " ").trim();
+  return t.length <= maxLen ? t : (t.slice(0, maxLen - 1) + "…");
+}
+
+function sanitizeSocial(raw: string | null): { url: string | null; is_valid: boolean; note: string } {
+  if (!raw) return { url: null, is_valid: false, note: "missing" };
+  let url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const allowed = ["linkedin.com","www.linkedin.com","twitter.com","x.com","www.twitter.com","www.x.com","facebook.com","www.facebook.com","instagram.com","www.instagram.com"];
+    if (!allowed.includes(host)) return { url: u.toString(), is_valid: false, note: "untrusted_host" };
+    if (host === "x.com" || host === "www.x.com") { u.hostname = "twitter.com"; }
+    if (u.pathname === "/" || u.pathname === "") {
+      return { url: u.toString(), is_valid: false, note: "untrusted_host" };
+    }
+    const note = /facebook|instagram/.test(u.hostname) ? "may_require_login" : "ok";
+    return { url: u.toString(), is_valid: true, note };
+  } catch {
+    return { url: null, is_valid: false, note: "bad_url" };
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -240,7 +280,7 @@ serve(async (req) => {
           },
           {
             role: 'user',
-            content: `URL: ${normalizedUrl}\n\nExtracted title/h1: ${extractedName}\n\nChunks:\n${JSON.stringify(chunks.slice(0, 12))}\n\nExtract and return JSON with this exact schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "offerings": [{"snippet":"string","source":"homepage","offset":number}],\n  "target_audience": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]}\n}`
+            content: `URL: ${normalizedUrl}\n\nExtracted title/h1: ${extractedName}\n\nChunks:\n${JSON.stringify(chunks.slice(0, 12))}\n\nExtract and return JSON with this exact schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words, productized, sentence-case, deduplicated)","details":"1-2 sentence description (≤180 chars)","source":"homepage","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}\n\nFor offerings_raw: return 5-10 short, productized phrases (≤12 words each), sentence-case, no brand repetition. Each with a brief 1-2 sentence description.\nFor target_audience_raw: return a list of short bullets (≤12 words each), each representing a distinct audience segment.`
           }
         ],
         temperature: 0.3
@@ -283,7 +323,7 @@ serve(async (req) => {
             },
             {
               role: 'user',
-              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching this schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "offerings": [{"snippet":"string","source":"homepage","offset":number}],\n  "target_audience": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]}\n}`
+              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching this schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source":"homepage","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}`
             }
           ],
           temperature: 0.1
@@ -296,6 +336,32 @@ serve(async (req) => {
       extractedData = JSON.parse(retryMatch ? retryMatch[0] : retryContent);
     }
 
+    // Transform offerings
+    const offeringsRaw = extractedData.offerings_raw || [];
+    const offeringBullets = toShortBulletsFromOfferings(
+      offeringsRaw.map((o: any) => o.snippet || o)
+    );
+    const offerings_bulleted = offeringBullets.map((bullet, idx) => {
+      const rawItem = offeringsRaw[idx] || {};
+      return {
+        bullet,
+        details: compressDetails(rawItem.details || bullet, 180),
+        evidence: rawItem.evidence || (rawItem.snippet ? [{ snippet: rawItem.snippet, source: "homepage", offset: rawItem.offset || 0 }] : [])
+      };
+    });
+
+    // Transform target audience
+    const targetAudienceRaw = extractedData.target_audience_raw || [];
+    const target_audience_list = toShortBulletsFromOfferings(targetAudienceRaw, 12);
+
+    // Sanitize socials
+    const sanitizedSocials = {
+      linkedin: sanitizeSocial(socials.linkedin),
+      twitter: sanitizeSocial(socials.twitter),
+      facebook: sanitizeSocial(socials.facebook),
+      instagram: sanitizeSocial(socials.instagram)
+    };
+
     // Build CompanyCard
     const analyzed_at = new Date().toISOString();
     const companyCard = {
@@ -305,12 +371,14 @@ serve(async (req) => {
       company_size: extractedData.company_size || { value: null, confidence: 'low', evidence: [] },
       hq_location: extractedData.hq_location || { value: null, confidence: 'low', evidence: [] },
       usp: extractedData.usp || { value: null, confidence: 'low', evidence: [] },
-      offerings: extractedData.offerings || [],
+      offerings: offeringsRaw,
+      offerings_bulleted,
       target_audience: extractedData.target_audience || { value: null, confidence: 'low', evidence: [] },
+      target_audience_list,
       contacts: {
         emails: Array.from(emails),
         phones: Array.from(phones),
-        socials
+        socials: sanitizedSocials
       },
       analyzed_at
     };
@@ -345,7 +413,11 @@ serve(async (req) => {
       target_audience: companyCard.target_audience,
       contacts: companyCard.contacts,
       analyzed_at: companyCard.analyzed_at,
-      analysis_json: companyCard
+      analysis_json: {
+        ...companyCard,
+        offerings_bulleted: companyCard.offerings_bulleted,
+        target_audience_list: companyCard.target_audience_list
+      }
     });
 
     if (cardError) {
