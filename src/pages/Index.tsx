@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, Bookmark, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,7 @@ import { EngagementInsights } from "@/components/EngagementInsights";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -56,11 +56,29 @@ const Index = () => {
   const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
   const [engagementData, setEngagementData] = useState<any>(null);
   const [savingToShortlist, setSavingToShortlist] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("insights");
   const { toast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const handleAnalyze = async () => {
-    if (!url.trim()) {
+  // Handle preload from navigation state
+  useEffect(() => {
+    const state = location.state as { preloadUrl?: string; openEngagement?: boolean } | null;
+    if (state?.preloadUrl) {
+      setUrl(state.preloadUrl);
+      if (state.openEngagement) {
+        setActiveTab("engagement");
+      }
+      // Trigger analysis
+      handleAnalyze(state.preloadUrl);
+      // Clear navigation state
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state]);
+
+  const handleAnalyze = async (urlToAnalyze?: string) => {
+    const targetUrl = urlToAnalyze || url;
+    if (!targetUrl.trim()) {
       toast({
         title: "Invalid URL",
         description: "Please enter a valid website URL.",
@@ -90,7 +108,7 @@ const Index = () => {
       }, 1500);
 
       const { data, error } = await supabase.functions.invoke('analyze', {
-        body: { url: url.trim() }
+        body: { url: targetUrl.trim() }
       });
 
       clearInterval(progressInterval);
@@ -241,7 +259,7 @@ const Index = () => {
               className="flex-1 text-base"
             />
             <Button
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={state === "loading"}
               size="lg"
               className="px-8"
@@ -261,7 +279,7 @@ const Index = () => {
             <AlertDescription>
               <div className="flex items-center justify-between mb-2">
                 <span>{errorMessage}</span>
-                <Button variant="outline" size="sm" onClick={handleAnalyze}>
+                <Button variant="outline" size="sm" onClick={() => handleAnalyze()}>
                   Retry
                 </Button>
               </div>
@@ -286,12 +304,12 @@ const Index = () => {
                 {savingToShortlist ? "Saving..." : "Add to My Shortlist"}
               </Button>
             </div>
-            <Tabs defaultValue="company" className="w-full max-w-4xl mx-auto">
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full max-w-4xl mx-auto">
               <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="company">Company Insights</TabsTrigger>
+                <TabsTrigger value="insights">Company Insights</TabsTrigger>
                 <TabsTrigger value="engagement">Engagement Insights</TabsTrigger>
               </TabsList>
-              <TabsContent value="company" className="space-y-8">
+              <TabsContent value="insights" className="space-y-8">
                 <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
               </TabsContent>
               <TabsContent value="engagement">

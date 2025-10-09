@@ -26,6 +26,8 @@ serve(async (req) => {
       return await handleUpdateMeta(supabase, params);
     } else if (action === 'remove') {
       return await handleRemove(supabase, params);
+    } else if (action === 'reanalyze') {
+      return await handleReanalyze(supabase, params);
     } else {
       return new Response(
         JSON.stringify({ ok: false, error: { message: "Invalid action" } }),
@@ -190,4 +192,112 @@ async function handleRemove(supabase: any, params: any) {
     JSON.stringify({ ok: true }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
+}
+
+async function handleReanalyze(supabase: any, params: any) {
+  const { url } = params;
+  
+  // Normalize URL
+  let normalizedUrl = url.trim();
+  if (!/^https?:\/\//i.test(normalizedUrl)) {
+    normalizedUrl = 'https://' + normalizedUrl;
+  }
+  
+  try {
+    // Call analyze edge function
+    const analyzeResponse = await supabase.functions.invoke('analyze', {
+      body: { url: normalizedUrl }
+    });
+    
+    if (analyzeResponse.error) throw analyzeResponse.error;
+    if (!analyzeResponse.data?.ok) {
+      throw new Error(analyzeResponse.data?.error?.message || 'Analysis failed');
+    }
+    
+    const companyCard = analyzeResponse.data.data;
+    
+    // Try to refresh engagement insights (best effort)
+    try {
+      await supabase.functions.invoke('engagement-insights', {
+        body: { url: normalizedUrl }
+      });
+    } catch (e) {
+      console.log('Engagement insights refresh failed (non-critical):', e);
+    }
+    
+    // Compute average confidence
+    const confidences = [
+      companyCard.industry?.confidence,
+      companyCard.company_size?.confidence,
+      companyCard.hq_location?.confidence,
+      companyCard.usp?.confidence,
+      companyCard.target_audience?.confidence,
+    ].filter(Boolean);
+    
+    const confMap: Record<string, number> = { high: 3, medium: 2, low: 1 };
+    const avgScore = confidences.reduce((sum, c) => sum + (confMap[c] || 0), 0) / confidences.length;
+    const avgConfidence = avgScore >= 2.5 ? 'high' : avgScore >= 1.5 ? 'medium' : 'low';
+    
+    // Get current shortlist item to preserve tags and notes
+    const { data: currentItem } = await supabase
+      .from('shortlist')
+      .select('tags, notes, icp_fit')
+      .eq('url', normalizedUrl)
+      .single();
+    
+    // Update shortlist with new analysis
+    const updateData = {
+      name: companyCard.name,
+      industry: companyCard.industry || null,
+      company_size: companyCard.company_size || null,
+      hq_location: companyCard.hq_location || null,
+      usp: companyCard.usp || null,
+      offerings_bulleted: companyCard.offerings_bulleted || null,
+      target_audience_list: companyCard.target_audience_list || null,
+      contacts: companyCard.contacts || null,
+      avg_confidence: avgConfidence,
+      analyzed_at: companyCard.analyzed_at || new Date().toISOString(),
+      // Preserve user metadata
+      tags: currentItem?.tags || null,
+      notes: currentItem?.notes || null,
+      icp_fit: currentItem?.icp_fit || null,
+    };
+    
+    const { data, error } = await supabase
+      .from('shortlist')
+      .update(updateData)
+      .eq('url', normalizedUrl)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // Insert snapshot into history
+    await supabase
+      .from('shortlist_history')
+      .insert({
+        shortlist_url: normalizedUrl,
+        snapshot: companyCard
+      });
+    
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        data: {
+          analyzed_at: data.analyzed_at,
+          avg_confidence: data.avg_confidence
+        }
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  } catch (error) {
+    console.error('Error re-analyzing:', error);
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: { message: error instanceof Error ? error.message : "Re-analysis failed" }
+      }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
 }

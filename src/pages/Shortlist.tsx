@@ -8,9 +8,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Search, Filter, Grid, List, ExternalLink, Trash2, Copy, Sparkles, X, MessageSquare } from "lucide-react";
+import { Grid, List, ExternalLink, Trash2, Copy, Sparkles, RefreshCw, Eye, Mail } from "lucide-react";
 import { ConfidenceBadge, ConfidenceLevel } from "@/components/ConfidenceBadge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useNavigate } from "react-router-dom";
+import { 
+  AlertDialog, 
+  AlertDialogAction, 
+  AlertDialogCancel, 
+  AlertDialogContent, 
+  AlertDialogDescription, 
+  AlertDialogFooter, 
+  AlertDialogHeader, 
+  AlertDialogTitle 
+} from "@/components/ui/alert-dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ShortlistItem {
   id: string;
@@ -36,17 +48,19 @@ interface ShortlistItem {
 export default function Shortlist() {
   const [items, setItems] = useState<ShortlistItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const [sortBy, setSortBy] = useState("created_at_desc");
   const [selectedItem, setSelectedItem] = useState<ShortlistItem | null>(null);
   const [editingTags, setEditingTags] = useState<string>("");
   const [editingNotes, setEditingNotes] = useState<string>("");
+  const [reanalyzingUrl, setReanalyzingUrl] = useState<string | null>(null);
+  const [itemToRemove, setItemToRemove] = useState<ShortlistItem | null>(null);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadItems();
-  }, [searchQuery, sortBy]);
+  }, [sortBy]);
 
   const loadItems = async () => {
     setLoading(true);
@@ -54,7 +68,6 @@ export default function Shortlist() {
       const { data, error } = await supabase.functions.invoke('shortlist', {
         body: { 
           action: 'list',
-          q: searchQuery,
           sort: sortBy
         }
       });
@@ -75,10 +88,12 @@ export default function Shortlist() {
     }
   };
 
-  const handleRemove = async (url: string) => {
+  const handleRemove = async () => {
+    if (!itemToRemove) return;
+    
     try {
       const { data, error } = await supabase.functions.invoke('shortlist', {
-        body: { action: 'remove', url }
+        body: { action: 'remove', url: itemToRemove.url }
       });
 
       if (error) throw error;
@@ -88,7 +103,8 @@ export default function Shortlist() {
         title: "Removed",
         description: "Company removed from shortlist",
       });
-      loadItems();
+      setItems(items.filter(item => item.url !== itemToRemove.url));
+      setItemToRemove(null);
     } catch (error) {
       console.error('Error removing item:', error);
       toast({
@@ -97,6 +113,63 @@ export default function Shortlist() {
         variant: "destructive",
       });
     }
+  };
+
+  const handleReanalyze = async (url: string) => {
+    setReanalyzingUrl(url);
+    try {
+      const { data, error } = await supabase.functions.invoke('shortlist', {
+        body: { action: 'reanalyze', url }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message);
+
+      toast({
+        title: "Re-analyzed successfully",
+        description: "Company data has been updated",
+      });
+      
+      // Update the specific item in the list
+      setItems(items.map(item => 
+        item.url === url 
+          ? { ...item, analyzed_at: data.data.analyzed_at, avg_confidence: data.data.avg_confidence }
+          : item
+      ));
+    } catch (error) {
+      console.error('Error re-analyzing:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Couldn't re-analyze this site",
+        variant: "destructive",
+      });
+    } finally {
+      setReanalyzingUrl(null);
+    }
+  };
+
+  const handleViewInsights = (url: string) => {
+    navigate('/', { state: { preloadUrl: url } });
+  };
+
+  const handleGenerateOutreach = (url: string) => {
+    navigate('/', { state: { preloadUrl: url, openEngagement: true } });
+  };
+
+  const handleCopySummary = (item: ShortlistItem) => {
+    const summary = `${item.name} — ${item.url}
+Industry: ${item.industry?.value || "N/A"} | Size: ${item.company_size?.value || "N/A"} | HQ: ${item.hq_location?.value || "N/A"}
+USP: ${item.usp?.value || "N/A"}
+Offerings: ${(item.offerings_bulleted || []).slice(0, 5).map((o: any) => o.bullet).join(", ") || "N/A"}
+Audience: ${(item.target_audience_list || []).slice(0, 5).join(", ") || "N/A"}
+Tone: ${item.tone_summary || "N/A"} | Keywords: ${(item.keywords_top || []).slice(0, 3).map(k => k.term).join(", ") || "N/A"}
+Analyzed: ${formatDate(item.analyzed_at)}`;
+
+    navigator.clipboard.writeText(summary);
+    toast({
+      title: "Copied!",
+      description: "Summary copied to clipboard",
+    });
   };
 
   const handleUpdateMeta = async (url: string) => {
@@ -129,13 +202,6 @@ export default function Shortlist() {
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({
-      title: "Copied!",
-      description: "Text copied to clipboard",
-    });
-  };
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString();
@@ -172,16 +238,7 @@ export default function Shortlist() {
           </div>
 
           {/* Toolbar */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search companies..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
-            </div>
+          <div className="flex flex-col sm:flex-row gap-4 items-center">
             <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Sort by" />
@@ -192,7 +249,7 @@ export default function Shortlist() {
                 <SelectItem value="confidence_desc">Confidence</SelectItem>
               </SelectContent>
             </Select>
-            <div className="flex gap-2">
+            <div className="flex gap-2 ml-auto">
               <Button
                 variant={viewMode === "cards" ? "default" : "outline"}
                 size="icon"
@@ -217,13 +274,13 @@ export default function Shortlist() {
         {items.length === 0 ? (
           <div className="text-center py-24">
             <p className="text-2xl font-semibold text-muted-foreground mb-4">
-              Your shortlist is empty
+              Your shortlist is empty.
             </p>
             <p className="text-muted-foreground mb-6">
-              Analyze a company and click "Add to My Shortlist"
+              Analyze a company and click Add to My Shortlist to save it here.
             </p>
-            <Button onClick={() => window.location.href = "/"}>
-              Analyze a Company
+            <Button onClick={() => navigate('/')}>
+              Go to Company Insights
             </Button>
           </div>
         ) : (
@@ -289,27 +346,93 @@ export default function Shortlist() {
                       )}
                     </CardContent>
 
-                    <CardFooter className="flex gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          window.open(item.url, '_blank');
-                        }}
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemove(item.url);
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                    <CardFooter className="flex flex-wrap gap-2 pt-4 border-t">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleReanalyze(item.url);
+                              }}
+                              disabled={reanalyzingUrl === item.url}
+                            >
+                              {reanalyzingUrl === item.url ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Re-Analyze</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleViewInsights(item.url);
+                              }}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View Insights</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleGenerateOutreach(item.url);
+                              }}
+                            >
+                              <Mail className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Generate Outreach</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCopySummary(item);
+                              }}
+                            >
+                              <Copy className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Copy Summary</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setItemToRemove(item);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Remove</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </CardFooter>
                   </Card>
                 </SheetTrigger>
@@ -372,7 +495,10 @@ export default function Shortlist() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  onClick={() => copyToClipboard(email)}
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(email);
+                                    toast({ title: "Copied!", description: "Email copied to clipboard" });
+                                  }}
                                 >
                                   <Copy className="h-3 w-3" />
                                 </Button>
@@ -415,6 +541,22 @@ export default function Shortlist() {
           </div>
         )}
       </div>
+
+      {/* Remove confirmation dialog */}
+      <AlertDialog open={!!itemToRemove} onOpenChange={() => setItemToRemove(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove from shortlist?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove {itemToRemove?.name} from My Shortlist? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRemove}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
