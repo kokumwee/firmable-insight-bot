@@ -253,129 +253,44 @@ function scoreLink(anchorText: string, pathname: string): number {
   return s;
 }
 
-// Smarter readability check
-function isReadable(html: string): boolean {
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const hasHeadings = /<h1|<h2|<h3/i.test(html);
-  const hasParas = /<p[\s>]/i.test(html);
-  const enoughChars = text.length >= 900;
-  return (hasHeadings || hasParas) && enoughChars;
-}
-
-// Robust fetch with retry ladder, jitter, and caching
-async function robustFetch(url: string, supabase: any): Promise<{ ok: boolean; html?: string; finalUrl?: string; code?: string; message?: string; fromCache?: boolean; variant?: number }> {
-  const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-  
-  // Check cache first
-  const { data: cachedPage } = await supabase
-    .from('page_cache')
-    .select('*')
-    .eq('url', url)
-    .single();
-
-  const isCacheFresh = cachedPage && (Date.now() - new Date(cachedPage.fetched_at).getTime() < CACHE_TTL_MS);
-  
-  // Define header variants for retry ladder - all properties must be defined
-  const variants: Record<string, string>[] = [
-    {
+async function robustFetch(url: string) {
+  let res = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "Accept-Language": "en-AU,en;q=0.9",
-      "Referer": "https://www.google.com/"
-    },
-    {
-      "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-AU,en;q=0.9",
-      "Referer": ""
-    },
-    {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.8",
-      "Referer": ""
-    },
-    {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.8",
-      "Referer": ""
+      "Cache-Control": "no-cache",
     }
-  ];
+  });
 
-  let lastError = null;
-  let lastBody = "";
-  let lastStatus = 0;
-
-  // Try each variant with backoff
-  for (let i = 0; i < variants.length; i++) {
-    try {
-      const res = await fetch(url, {
-        method: "GET",
-        redirect: "follow",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: variants[i]
-      });
-
-      const body = await res.text();
-      lastBody = body;
-      lastStatus = res.status;
-
-      // Check if blocked or empty
-      const looksBlocked = !res.ok || res.status >= 400 || body.length < 2000 ||
-        /access\s*denied|enable\s*javascript|cloudflare|akamai|captcha|consent/i.test(body);
-
-      if (!looksBlocked && isReadable(body)) {
-        // Success! Cache it
-        console.log(`✓ Fetch succeeded with variant ${i + 1}`);
-        await supabase.from('page_cache').upsert({
-          url,
-          html: body,
-          status: res.status,
-          fetched_at: new Date().toISOString(),
-          diagnostic: { variant: i + 1, finalUrl: res.url, headers: Object.keys(variants[i]) }
-        });
-        return { ok: true, html: body, finalUrl: res.url, variant: i + 1 };
+  if (!res.ok || res.status >= 400) {
+    res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       }
-
-      // Cooldown before next attempt (1-2s with jitter)
-      if (i < variants.length - 1) {
-        const cooldown = 1000 + Math.random() * 1000;
-        await new Promise(resolve => setTimeout(resolve, cooldown));
-      }
-
-    } catch (err) {
-      lastError = err;
-      console.error(`Attempt ${i + 1} failed:`, err);
-      
-      // Exponential backoff with jitter
-      if (i < variants.length - 1) {
-        const baseDelay = Math.pow(2, i) * 400;
-        const jitter = Math.random() * 300;
-        await new Promise(resolve => setTimeout(resolve, baseDelay + jitter));
-      }
-    }
+    });
   }
 
-  // All attempts failed - check cache as fallback
-  if (cachedPage && cachedPage.html && isReadable(cachedPage.html)) {
-    console.log(`Using cached content from ${cachedPage.fetched_at} (all attempts failed)`);
-    return { ok: true, html: cachedPage.html, finalUrl: url, fromCache: true };
+  const body = await res.text();
+  const looksBlocked = !res.ok || res.status >= 400 || body.length < 2500 ||
+    /access\s*denied|enable\s*javascript|cloudflare/i.test(body);
+
+  if (looksBlocked) {
+    return {
+      ok: false,
+      code: res.status >= 400 ? `HTTP_${res.status}` : "BLOCKED_OR_EMPTY",
+      message: "Site blocked or requires JavaScript",
+    };
   }
 
-  // No cache or cache not readable
-  const code = lastStatus >= 400 ? `HTTP_${lastStatus}` : "BLOCKED_OR_EMPTY";
-  const snippet = lastBody.slice(0, 300);
-  return {
-    ok: false,
-    code,
-    message: "Site blocked or requires JavaScript",
-  };
+  return { ok: true, html: body, finalUrl: res.url };
 }
 
 // Main crawl function
@@ -432,7 +347,7 @@ async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; ch
       // Polite delay
       if (i > 0) await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
 
-      const fetchResult = await robustFetch(pageUrl, supabase);
+      const fetchResult = await robustFetch(pageUrl);
       
       if (!fetchResult.ok) {
         // Store as blocked
@@ -454,8 +369,8 @@ async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; ch
       cleanedHtml = cleanedHtml.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
       const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-      if (!isReadable(fetchResult.html!)) {
-        console.log(`Skipping ${pageUrl} - not readable`);
+      if (textContent.length < MIN_TEXT_LEN) {
+        console.log(`Skipping ${pageUrl} - too short`);
         continue;
       }
 
@@ -861,8 +776,7 @@ serve(async (req) => {
       crawl: {
         total_pages: pages.length,
         total_chunks: chunks.length,
-        truncated,
-        from_cache: false
+        truncated
       }
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -53,7 +53,6 @@ const Index = () => {
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
-  const [fromCache, setFromCache] = useState(false);
   const { toast } = useToast();
 
   const handleAnalyze = async () => {
@@ -110,7 +109,6 @@ const Index = () => {
       }
 
       setCompanyData(data.data as CompanyData);
-      setFromCache(data.crawl?.from_cache || false);
       setState("success");
       
       toast({
@@ -214,9 +212,7 @@ const Index = () => {
                 </Button>
               </div>
               <p className="text-sm opacity-80 mt-2">
-                {errorMessage.includes("blocked") || errorMessage.includes("JavaScript") 
-                  ? "Tip: This page may be protected or very JS-heavy. Try another URL from the same site."
-                  : "Tip: Some sites block automated reads. Try a different URL or a less JS-heavy page."}
+                Tip: Some sites block automated reads. Try a different URL or a less JS-heavy page.
               </p>
             </AlertDescription>
           </Alert>
@@ -231,7 +227,7 @@ const Index = () => {
                 <TabsTrigger value="engagement">Engagement Insights</TabsTrigger>
               </TabsList>
               <TabsContent value="company" className="space-y-8">
-                <CompanyCard data={companyData} onReanalyze={handleReanalyze} fromCache={fromCache} />
+                <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
               </TabsContent>
               <TabsContent value="engagement">
                 <EngagementInsights url={companyData.url} />

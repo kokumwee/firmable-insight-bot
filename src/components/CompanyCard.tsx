@@ -62,10 +62,9 @@ interface CompanyData {
 interface CompanyCardProps {
   data: CompanyData;
   onReanalyze: () => void;
-  fromCache?: boolean;
 }
 
-export const CompanyCard = ({ data, onReanalyze, fromCache }: CompanyCardProps) => {
+export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
   const { toast } = useToast();
   const [modalOpen, setModalOpen] = useState(false);
   const [suggestionData, setSuggestionData] = useState<any>(null);
@@ -150,15 +149,7 @@ export const CompanyCard = ({ data, onReanalyze, fromCache }: CompanyCardProps) 
     <Card className="w-full max-w-4xl mx-auto shadow-card hover:shadow-card-hover transition-shadow animate-slide-up">
       <CardHeader className="space-y-4">
         <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <h2 className="text-3xl font-bold text-foreground">{data.name}</h2>
-            {fromCache && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted px-2.5 py-1 rounded-md border border-border">
-                <Info className="h-3.5 w-3.5" />
-                <span>Using cached content (last 24h)</span>
-              </div>
-            )}
-          </div>
+          <h2 className="text-3xl font-bold text-foreground">{data.name}</h2>
           <a
             href={data.url}
             target="_blank"

@@ -160,48 +160,6 @@ export type Database = {
         }
         Relationships: []
       }
-      market_neighbors: {
-        Row: {
-          created_at: string | null
-          neighbors: Json
-          url: string
-        }
-        Insert: {
-          created_at?: string | null
-          neighbors?: Json
-          url: string
-        }
-        Update: {
-          created_at?: string | null
-          neighbors?: Json
-          url?: string
-        }
-        Relationships: []
-      }
-      page_cache: {
-        Row: {
-          diagnostic: Json | null
-          fetched_at: string
-          html: string
-          status: number
-          url: string
-        }
-        Insert: {
-          diagnostic?: Json | null
-          fetched_at?: string
-          html: string
-          status: number
-          url: string
-        }
-        Update: {
-          diagnostic?: Json | null
-          fetched_at?: string
-          html?: string
-          status?: number
-          url?: string
-        }
-        Relationships: []
-      }
       pages: {
         Row: {
           blocked: boolean | null
@@ -214,7 +172,6 @@ export type Database = {
           origin: string
           page_type: string
           path: string
-          reason: string | null
           status_code: number | null
           url: string
         }
@@ -229,7 +186,6 @@ export type Database = {
           origin: string
           page_type: string
           path: string
-          reason?: string | null
           status_code?: number | null
           url: string
         }
@@ -244,7 +200,6 @@ export type Database = {
           origin?: string
           page_type?: string
           path?: string
-          reason?: string | null
           status_code?: number | null
           url?: string
         }
