@@ -2,53 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-// ==================== TYPES ====================
-type Confidence = "high" | "medium" | "low";
-type FieldName = "industry" | "company_size" | "hq_location" | "usp" | "offerings" | "target_audience";
-type ResolverName = "extractor" | "classifier" | "metadata" | "schema" | "rules" | "cross_page" | "rendered_home";
-
-type Evidence = { 
-  snippet: string; 
-  source_url: string; 
-  page_type: string; 
-  offset?: number;
-};
-
-type Candidate = {
-  field: FieldName;
-  value: string | string[] | null;
-  confidence: Confidence;
-  evidence: Evidence[];
-  resolver: ResolverName;
-};
-
-type PageData = {
-  id: string;
-  url: string;
-  origin: string;
-  path: string;
-  page_type: string;
-  meta: any;
-  jsonld: any[];
-};
-
-type ChunkData = {
-  id: string;
-  text: string;
-  page_id: string;
-  source_url: string;
-  page_type: string;
-  text_offset: number;
-};
-
-type SiteData = {
-  pages: PageData[];
-  chunks: ChunkData[];
-  url: string;
-  renderedHomeText?: string;
-};
-
-// ==================== CONFIG ====================
+// Config caps
 const CRAWL_MAX_PAGES = 250;
 const CRAWL_MAX_DEPTH = 4;
 const CRAWL_MAX_PER_SECTION = 80;
@@ -56,37 +10,6 @@ const REQUEST_DELAY_MS = 500;
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_CHUNKS_FOR_LLM = 60;
 const MIN_TEXT_LEN = 1200;
-const ANALYZE_DEBUG = Deno.env.get("ANALYZE_DEBUG") === "true";
-
-// ==================== HELPERS ====================
-function confScore(c: Confidence): number { 
-  return c === "high" ? 3 : c === "medium" ? 2 : 1; 
-}
-
-const resolverPriority: ResolverName[] = 
-  ["metadata", "schema", "cross_page", "extractor", "classifier", "rules", "rendered_home"];
-
-function mergeCandidates(field: FieldName, candidates: Candidate[]): { winner: Candidate; used: Candidate[] } {
-  const nonNull = candidates.filter(c => c.value != null);
-  if (nonNull.length === 0) {
-    const empty: Candidate = { 
-      field, 
-      value: null, 
-      confidence: "low", 
-      evidence: [], 
-      resolver: "extractor" 
-    };
-    return { winner: empty, used: [] };
-  }
-  
-  nonNull.sort((a, b) =>
-    (confScore(b.confidence) - confScore(a.confidence)) ||
-    ((b.evidence?.length || 0) - (a.evidence?.length || 0)) ||
-    (resolverPriority.indexOf(a.resolver) - resolverPriority.indexOf(b.resolver))
-  );
-  
-  return { winner: nonNull[0], used: nonNull };
-}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -102,7 +25,7 @@ function normalizeUrl(input: string): string {
   try {
     const u = new URL(url);
     u.host = u.host.toLowerCase();
-    u.hash = "";
+    u.hash = ""; // remove fragments
     return u.toString();
   } catch {
     return url;
@@ -165,45 +88,7 @@ function classifyPath(pathname: string): string {
   return "other";
 }
 
-function cleanHtml(html: string): { text: string; meta: any; jsonld: any[] } {
-  const meta: any = {};
-  const jsonld: any[] = [];
-  
-  // Parse metadata with regex
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if (titleMatch) meta.title = titleMatch[1].trim();
-  
-  const metaMatches = html.matchAll(/<meta\s+(?:[^>]*?\s+)?(?:name|property)=["']([^"']+)["'][^>]*?\s+content=["']([^"']+)["'][^>]*?>/gi);
-  for (const match of metaMatches) {
-    const name = match[1];
-    const content = match[2];
-    if (name === "description") meta.description = content;
-    if (name === "og:title") meta.og_title = content;
-    if (name === "og:site_name") meta.og_site_name = content;
-    if (name === "og:description") meta.og_description = content;
-  }
-  
-  // Parse JSON-LD
-  const scriptMatches = html.matchAll(/<script\s+type=["']application\/ld\+json["'][^>]*>([^<]+)<\/script>/gi);
-  for (const match of scriptMatches) {
-    try {
-      const data = JSON.parse(match[1]);
-      const relevantTypes = ["Organization", "LocalBusiness", "Corporation", "NGO", "Product", "SoftwareApplication", "WebSite", "WebPage"];
-      if (data["@type"] && relevantTypes.some(t => data["@type"].includes?.(t) || data["@type"] === t)) {
-        jsonld.push(data);
-      }
-    } catch {}
-  }
-  
-  // Clean HTML tags
-  let text = html.replace(/<script[\s\S]*?<\/script>/gi, '');
-  text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
-  text = text.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
-  text = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  
-  return { text, meta, jsonld };
-}
-
+// Sitemap discovery and parsing
 async function discoverSitemap(baseUrl: URL): Promise<{ urls: string[]; via: string }> {
   const sitemapPaths = [
     "/sitemap.xml",
@@ -220,8 +105,13 @@ async function discoverSitemap(baseUrl: URL): Promise<{ urls: string[]; via: str
       const res = await fetchText(sitemapUrl);
       
       if (res.ok && res.text.length > 0) {
-        if (path.endsWith('.gz')) continue;
+        // Check if it's gzipped
+        if (path.endsWith('.gz')) {
+          // Skip .gz for MVP - would need decompression library
+          continue;
+        }
 
+        // Check if it's a sitemap index
         if (res.text.includes('<sitemapindex')) {
           const childSitemaps = res.text.matchAll(/<loc>([^<]+)<\/loc>/gi);
           const allUrls: string[] = [];
@@ -245,6 +135,7 @@ async function discoverSitemap(baseUrl: URL): Promise<{ urls: string[]; via: str
             return { urls: allUrls.slice(0, CRAWL_MAX_PAGES), via: "sitemap" };
           }
         } else {
+          // Regular sitemap
           const urls = extractUrlsFromSitemap(res.text, baseUrl.origin);
           if (urls.length > 0) {
             return { urls: urls.slice(0, CRAWL_MAX_PAGES), via: "sitemap" };
@@ -275,9 +166,10 @@ function extractUrlsFromSitemap(xml: string, origin: string): string[] {
     }
   }
   
-  return [...new Set(urls)];
+  return [...new Set(urls)]; // dedupe
 }
 
+// BFS crawl fallback
 async function bfsCrawl(baseUrl: URL, robotsTxt: string | null): Promise<string[]> {
   const visited = new Set<string>([baseUrl.pathname]);
   const queue: Array<{ url: URL; depth: number }> = [{ url: baseUrl, depth: 0 }];
@@ -296,6 +188,7 @@ async function bfsCrawl(baseUrl: URL, robotsTxt: string | null): Promise<string[
       
       if (!res.ok) continue;
 
+      // Extract links
       const linkMatches = res.text.matchAll(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi);
       const candidates: Array<{ url: URL; text: string; score: number }> = [];
 
@@ -309,6 +202,7 @@ async function bfsCrawl(baseUrl: URL, robotsTxt: string | null): Promise<string[
           if (visited.has(candidateUrl.pathname)) continue;
           if (!allowedByRobots(robotsTxt, candidateUrl.pathname)) continue;
           
+          // Skip unwanted paths
           if (/\.(pdf|docx?|zip|jpg|jpeg|png|svg|mp4|webm)(\?|$)/i.test(candidateUrl.pathname)) continue;
           if (/login|cart|checkout|search/.test(candidateUrl.pathname)) continue;
 
@@ -321,6 +215,7 @@ async function bfsCrawl(baseUrl: URL, robotsTxt: string | null): Promise<string[
         }
       }
 
+      // Sort by score and add to queue
       candidates.sort((a, b) => b.score - a.score);
       for (const candidate of candidates.slice(0, 10)) {
         if (!visited.has(candidate.url.pathname)) {
@@ -344,10 +239,15 @@ function scoreLink(anchorText: string, pathname: string): number {
   const p = (pathname || "").toLowerCase();
   let s = 0;
   
+  // Prioritize important sections
   if (/about|company|who-we-are|team|leadership|contact|pricing|press|media|investors/.test(t + p)) s += 5;
   if (/about|company/.test(p)) s += 3;
   if (/team|leadership/.test(p)) s += 3;
+  
+  // Prefer shorter paths
   if ((p.match(/\//g) || []).length <= 2) s += 2;
+  
+  // Penalize
   if (/login|cart|checkout|privacy|terms/.test(p)) s -= 5;
   
   return s;
@@ -393,9 +293,10 @@ async function robustFetch(url: string) {
   return { ok: true, html: body, finalUrl: res.url };
 }
 
-async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<{ pages: number; chunks: number; truncated: boolean }> {
+// Main crawl function
+async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; chunks: any[]; truncated: boolean }> {
   const startTime = Date.now();
-  const MAX_CRAWL_TIME = 90000;
+  const MAX_CRAWL_TIME = 90000; // 90 seconds
   
   const normalizedUrl = normalizeUrl(url);
   const baseUrl = new URL(normalizedUrl);
@@ -416,13 +317,14 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
     console.log(`BFS found ${urlList.length} URLs`);
   }
 
+  // Track per-section counts
   const sectionCounts: Record<string, number> = {};
-  let pageCount = 0;
-  let chunkCount = 0;
+  const pages: any[] = [];
+  const chunks: any[] = [];
+  let chunkIndex = 0;
   let truncated = false;
 
   console.log(`Crawling ${urlList.length} pages...`);
-  onProgress?.({ stage: "crawl", total: urlList.length, done: 0 });
 
   for (let i = 0; i < urlList.length; i++) {
     if (Date.now() - startTime > MAX_CRAWL_TIME) {
@@ -435,17 +337,20 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
     const pageUrlObj = new URL(pageUrl);
     const pageType = classifyPath(pageUrlObj.pathname);
 
+    // Check section cap
     if (sectionCounts[pageType] >= CRAWL_MAX_PER_SECTION) {
       console.log(`Skipping ${pageUrl} - section ${pageType} cap reached`);
       continue;
     }
 
     try {
+      // Polite delay
       if (i > 0) await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
 
       const fetchResult = await robustFetch(pageUrl);
       
       if (!fetchResult.ok) {
+        // Store as blocked
         await supabase.from('pages').upsert({
           url: pageUrl,
           origin: baseUrl.origin,
@@ -453,26 +358,30 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
           page_type: pageType,
           status_code: 0,
           blocked: true,
-          content_len: 0,
-          meta: {},
-          jsonld: []
+          content_len: 0
         });
         continue;
       }
 
-      const { text, meta, jsonld } = cleanHtml(fetchResult.html!);
+      // Clean HTML
+      let cleanedHtml = fetchResult.html!.replace(/<script[\s\S]*?<\/script>/gi, '');
+      cleanedHtml = cleanedHtml.replace(/<style[\s\S]*?<\/style>/gi, '');
+      cleanedHtml = cleanedHtml.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+      const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-      if (text.length < MIN_TEXT_LEN) {
+      if (textContent.length < MIN_TEXT_LEN) {
         console.log(`Skipping ${pageUrl} - too short`);
         continue;
       }
 
+      // Calculate hash
       const encoder = new TextEncoder();
-      const data = encoder.encode(text);
+      const data = encoder.encode(textContent);
       const hashBuffer = await crypto.subtle.digest('SHA-256', data);
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       const contentHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
+      // Store page
       const { data: pageData, error: pageError } = await supabase.from('pages').upsert({
         url: pageUrl,
         origin: baseUrl.origin,
@@ -480,10 +389,8 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
         page_type: pageType,
         status_code: 200,
         content_hash: contentHash,
-        content_len: text.length,
-        blocked: false,
-        meta,
-        jsonld
+        content_len: textContent.length,
+        blocked: false
       }).select().single();
 
       if (pageError) {
@@ -491,17 +398,18 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
         continue;
       }
 
-      pageCount++;
+      pages.push(pageData);
       sectionCounts[pageType] = (sectionCounts[pageType] || 0) + 1;
 
+      // Chunk text
       const chunkSize = 750;
       let offset = 0;
-      while (offset < text.length) {
-        const chunkText = text.slice(offset, offset + chunkSize);
-        await supabase.from('chunks').insert({
+      while (offset < textContent.length) {
+        const chunkText = textContent.slice(offset, offset + chunkSize);
+        chunks.push({
           page_id: pageData.id,
           url: normalizedUrl,
-          chunk_id: `c${chunkCount + 1}`,
+          chunk_id: `c${chunkIndex + 1}`,
           text: chunkText,
           text_offset: offset,
           source_url: pageUrl,
@@ -509,10 +417,9 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
           page_type: pageType
         });
         offset += chunkSize;
-        chunkCount++;
+        chunkIndex++;
       }
 
-      onProgress?.({ stage: "crawl", total: urlList.length, done: i + 1 });
       console.log(`Crawled ${i + 1}/${urlList.length}: ${pageUrl} (${pageType})`);
 
     } catch (err) {
@@ -520,10 +427,10 @@ async function crawlSite(url: string, supabase: any, onProgress?: any): Promise<
     }
   }
 
-  console.log(`Crawled ${pageCount} pages, created ${chunkCount} chunks`);
-  return { pages: pageCount, chunks: chunkCount, truncated };
+  return { pages, chunks, truncated };
 }
 
+// Select best chunks for LLM
 function selectBestChunks(chunks: any[], maxChunks: number): any[] {
   const keywords = [
     "industry", "customers", "pricing", "team", "about", "mission",
@@ -534,10 +441,12 @@ function selectBestChunks(chunks: any[], maxChunks: number): any[] {
   const scored = chunks.map(chunk => {
     let score = 0;
     
+    // Page type scoring
     if (["about", "company", "team", "contact", "pricing", "press"].includes(chunk.page_type)) score += 5;
     if (chunk.page_type === "homepage") score += 3;
     if (["legal", "privacy", "terms"].includes(chunk.page_type)) score -= 2;
     
+    // Keyword scoring
     const text = chunk.text.toLowerCase();
     for (const kw of keywords) {
       if (text.includes(kw)) score += 1;
@@ -548,6 +457,7 @@ function selectBestChunks(chunks: any[], maxChunks: number): any[] {
 
   scored.sort((a, b) => b.score - a.score);
 
+  // Limit chunks per page type for diversity
   const typeCount: Record<string, number> = {};
   const selected: any[] = [];
 
@@ -564,385 +474,44 @@ function selectBestChunks(chunks: any[], maxChunks: number): any[] {
   return selected;
 }
 
-async function extractContacts(url: string, supabase: any) {
-  const { data: chunks } = await supabase
-    .from("chunks")
-    .select("text, source_url, page_type")
-    .eq("url", url)
-    .in("page_type", ["contact", "about", "homepage"]);
-
-  const allText = (chunks || []).map((c: any) => c.text).join(" ");
-
-  const emails: string[] = [];
-  const emailMatches = allText.matchAll(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g);
-  for (const match of emailMatches) {
-    const email = match[1].toLowerCase();
-    if (!email.includes("example") && !email.includes("@sentry") && !email.includes("@placeholder")) {
-      emails.push(email);
-    }
-  }
-
-  const phones: string[] = [];
-  const phoneMatches = allText.matchAll(/\+?[\d\s\-\(\)]{10,}/g);
-  for (const match of phoneMatches) {
-    const phone = match[0].replace(/\s/g, "");
-    if (phone.length >= 10) phones.push(phone);
-  }
-
-  const socials = {
-    linkedin: { url: null, is_valid: false, note: "missing" },
-    twitter: { url: null, is_valid: false, note: "missing" },
-    facebook: { url: null, is_valid: false, note: "missing" },
-    instagram: { url: null, is_valid: false, note: "missing" }
-  };
-
-  return { emails: [...new Set(emails)], phones: [...new Set(phones)], socials };
-}
-
-// ==================== RESOLVERS ====================
-
-async function extractorResolver(field: FieldName, siteData: SiteData): Promise<Candidate | null> {
-  const selectedChunks = selectBestChunks(siteData.chunks, 10);
-  if (selectedChunks.length === 0) return null;
-  
-  const fieldPrompts: Record<FieldName, string> = {
-    industry: "What industry is this company in? (e.g., Software, Financial Services, Healthcare). Return single label or null.",
-    company_size: "How many employees? Return bucket: 1-10, 11-50, 51-200, 201-1000, 1000+ or null.",
-    hq_location: "Where is the headquarters? Return City, Country or null.",
-    usp: "What's the unique selling proposition? ≤20 words or null.",
-    offerings: "List 3-8 key offerings as array or null.",
-    target_audience: "Who are the target customers? 2-5 segments as array or null."
-  };
-
-  const prompt = `${fieldPrompts[field]}
-
-Site: ${siteData.url}
-Text snippets:
-${selectedChunks.map((c, i) => `[${i + 1}] (${c.page_type}) ${c.text.slice(0, 400)}`).join("\n\n")}
-
-Return JSON: { "value": string|string[]|null, "confidence": "high|medium|low", "evidence": [{"snippet":"...", "source_url":"${siteData.url}", "page_type":"homepage"}] }`;
-
-  try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${Deno.env.get("LOVABLE_API_KEY")}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "Extract structured data. Use evidence from any page. Prefer official pages for HQ/size. Return concise values with evidence. If unknown, value=null with confidence='low'." },
-          { role: "user", content: prompt }
-        ]
-      })
+// Helper functions for data transformation
+function toShortBulletsFromOfferings(aiOfferings: string[], maxWords = 12): string[] {
+  const bullets = aiOfferings
+    .map(s => (s || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .map(s => {
+      const words = s.split(" ");
+      const trimmed = words.slice(0, maxWords).join(" ");
+      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1).replace(/[.;,:-]+$/, "");
     });
-    
-    const data = await response.json();
-    const result = JSON.parse(data.choices[0].message.content);
-    
-    return {
-      field,
-      value: result.value,
-      confidence: result.confidence || "medium",
-      evidence: (result.evidence || []).slice(0, 2),
-      resolver: "extractor"
-    };
-  } catch (e) {
-    console.error("Extractor error:", e);
-    return null;
-  }
+  const seen = new Set();
+  return bullets.filter(b => (seen.has(b.toLowerCase()) ? false : (seen.add(b.toLowerCase()), true)));
 }
 
-async function classifierResolver(field: FieldName, siteData: SiteData): Promise<Candidate | null> {
-  const homePage = siteData.pages.find(p => p.page_type === "homepage");
-  const aboutPage = siteData.pages.find(p => p.page_type === "about" || p.page_type === "company");
-  
-  if (!homePage && !aboutPage) return null;
-  
-  const signals: string[] = [];
-  if (homePage?.meta?.title) signals.push(`Title: ${homePage.meta.title}`);
-  if (homePage?.meta?.description) signals.push(`Desc: ${homePage.meta.description}`);
-  if (aboutPage?.meta?.title) signals.push(`About: ${aboutPage.meta.title}`);
-  
-  const allJsonLd = [...(homePage?.jsonld || []), ...(aboutPage?.jsonld || [])];
-  allJsonLd.forEach(ld => {
-    if (ld.name) signals.push(`Company: ${ld.name}`);
-    if (ld.numberOfEmployees) signals.push(`Employees: ${ld.numberOfEmployees}`);
-  });
-  
-  const keywordChunks = siteData.chunks
-    .filter(c => /industry|customers|pricing|team|about|headquarters|hq|employees/.test(c.text.toLowerCase()))
-    .slice(0, 3);
-  keywordChunks.forEach(c => signals.push(c.text.slice(0, 150)));
-  
-  if (signals.length === 0) return null;
-  
-  const fieldPrompts: Record<FieldName, string> = {
-    industry: "Classify industry: Software, Financial Services, Healthcare, E-commerce, Education, Media, Manufacturing, Other. Single label.",
-    company_size: "Estimate size: 1-10, 11-50, 51-200, 201-1000, 1000+. Single bucket.",
-    hq_location: "Extract HQ (city, country). String or null.",
-    target_audience: "Identify 2-5 segments: SMB, Enterprise, Developers, Consumers, etc. Array.",
-    usp: "Summarize USP in ≤20 words. String.",
-    offerings: "List 3-8 offerings as bullets. Array."
-  };
-  
-  const prompt = `${fieldPrompts[field]}
+function compressDetails(text: string, maxLen = 180): string {
+  const t = (text || "").replace(/\s+/g, " ").trim();
+  return t.length <= maxLen ? t : (t.slice(0, maxLen - 1) + "…");
+}
 
-Signals:
-${signals.join("\n")}
-
-Return JSON: { "value": string|string[]|null, "confidence": "high|medium|low", "evidence": [{"snippet":"...", "source_url":"${siteData.url}", "page_type":"homepage"}] }`;
-
+function sanitizeSocial(raw: string | null): { url: string | null; is_valid: boolean; note: string } {
+  if (!raw) return { url: null, is_valid: false, note: "missing" };
+  let url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
   try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${Deno.env.get("LOVABLE_API_KEY")}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "You classify company fields from signals. Output single best value per field. Prefer conventional labels. Return strict JSON. If insufficient, value=null with confidence='low'." },
-          { role: "user", content: prompt }
-        ]
-      })
-    });
-    
-    const data = await response.json();
-    const result = JSON.parse(data.choices[0].message.content);
-    
-    return {
-      field,
-      value: result.value,
-      confidence: result.confidence || "medium",
-      evidence: (result.evidence || []).slice(0, 2),
-      resolver: "classifier"
-    };
-  } catch (e) {
-    console.error("Classifier error:", e);
-    return null;
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const allowed = ["linkedin.com", "www.linkedin.com", "twitter.com", "x.com", "www.twitter.com", "www.x.com", "facebook.com", "www.facebook.com", "instagram.com", "www.instagram.com"];
+    if (!allowed.includes(host)) return { url: u.toString(), is_valid: false, note: "untrusted_host" };
+    if (host === "x.com" || host === "www.x.com") { u.hostname = "twitter.com"; }
+    if (u.pathname === "/" || u.pathname === "") {
+      return { url: u.toString(), is_valid: false, note: "untrusted_host" };
+    }
+    const note = /facebook|instagram/.test(u.hostname) ? "may_require_login" : "ok";
+    return { url: u.toString(), is_valid: true, note };
+  } catch {
+    return { url: null, is_valid: false, note: "bad_url" };
   }
 }
-
-function metadataResolver(field: FieldName, siteData: SiteData): Candidate | null {
-  const homePage = siteData.pages.find(p => p.page_type === "homepage");
-  if (!homePage?.meta) return null;
-  
-  const meta = homePage.meta;
-  const evidence: Evidence[] = [];
-  let value: string | string[] | null = null;
-  let confidence: Confidence = "medium";
-  
-  switch (field) {
-    case "industry": {
-      const desc = meta.description || meta.og_description || "";
-      if (/software|saas|technology|platform/i.test(desc)) {
-        value = "Software";
-        evidence.push({ snippet: desc.slice(0, 100), source_url: homePage.url, page_type: "homepage" });
-      } else if (/financ|bank|payment/i.test(desc)) {
-        value = "Financial Services";
-        evidence.push({ snippet: desc.slice(0, 100), source_url: homePage.url, page_type: "homepage" });
-      }
-      break;
-    }
-    case "usp": {
-      const desc = meta.description || meta.og_description;
-      if (desc && desc.length > 20) {
-        value = desc.slice(0, 150).trim();
-        evidence.push({ snippet: desc, source_url: homePage.url, page_type: "homepage" });
-      }
-      break;
-    }
-    case "offerings": {
-      const title = meta.title || "";
-      const desc = meta.description || "";
-      const combined = `${title}. ${desc}`;
-      const bullets = combined.split(/[.;|]/).map(s => s.trim()).filter(s => s.length > 10 && s.length < 100);
-      if (bullets.length >= 2) {
-        value = bullets.slice(0, 8);
-        evidence.push({ snippet: combined.slice(0, 200), source_url: homePage.url, page_type: "homepage" });
-      }
-      break;
-    }
-  }
-  
-  if (!value) return null;
-  
-  return { field, value, confidence, evidence, resolver: "metadata" };
-}
-
-function schemaResolver(field: FieldName, siteData: SiteData): Candidate | null {
-  const allJsonLd = siteData.pages.flatMap(p => p.jsonld || []);
-  if (allJsonLd.length === 0) return null;
-  
-  const evidence: Evidence[] = [];
-  let value: string | string[] | null = null;
-  const confidence: Confidence = "high";
-  
-  for (const ld of allJsonLd) {
-    switch (field) {
-      case "hq_location": {
-        if (ld.address) {
-          const addr = ld.address;
-          const parts = [addr.addressLocality, addr.addressRegion, addr.addressCountry].filter(Boolean);
-          if (parts.length > 0) {
-            value = parts.join(", ");
-            evidence.push({ 
-              snippet: JSON.stringify(addr).slice(0, 100), 
-              source_url: siteData.pages.find(p => p.jsonld?.includes(ld))?.url || siteData.url, 
-              page_type: "about" 
-            });
-          }
-        }
-        break;
-      }
-      case "company_size": {
-        if (ld.numberOfEmployees) {
-          const num = parseInt(ld.numberOfEmployees);
-          if (!isNaN(num)) {
-            if (num <= 10) value = "1-10";
-            else if (num <= 50) value = "11-50";
-            else if (num <= 200) value = "51-200";
-            else if (num <= 1000) value = "201-1000";
-            else value = "1000+";
-            evidence.push({ 
-              snippet: `numberOfEmployees: ${ld.numberOfEmployees}`, 
-              source_url: siteData.pages.find(p => p.jsonld?.includes(ld))?.url || siteData.url, 
-              page_type: "about" 
-            });
-          }
-        }
-        break;
-      }
-      case "industry": {
-        if (ld.industry) {
-          value = ld.industry;
-          evidence.push({ 
-            snippet: `industry: ${ld.industry}`, 
-            source_url: siteData.pages.find(p => p.jsonld?.includes(ld))?.url || siteData.url, 
-            page_type: "homepage" 
-          });
-        }
-        break;
-      }
-    }
-    if (value) break;
-  }
-  
-  if (!value) return null;
-  
-  return { field, value, confidence, evidence, resolver: "schema" };
-}
-
-function rulesResolver(field: FieldName, siteData: SiteData): Candidate | null {
-  const evidence: Evidence[] = [];
-  let value: string | null = null;
-  const confidence: Confidence = "medium";
-  
-  switch (field) {
-    case "hq_location": {
-      for (const chunk of siteData.chunks) {
-        const matches = chunk.text.match(/(?:headquarters|hq|located|based|office)[\s:]+([A-Z][a-zA-Z\s,]+(?:USA|Australia|UK|Canada|Germany|France|Singapore|India|China|Japan)[^.]{0,30})/i);
-        if (matches) {
-          value = matches[1].trim();
-          evidence.push({ snippet: matches[0], source_url: chunk.source_url, page_type: chunk.page_type, offset: chunk.text_offset });
-          break;
-        }
-      }
-      break;
-    }
-    case "company_size": {
-      for (const chunk of siteData.chunks) {
-        const matches = chunk.text.match(/(\d+[\+]?)\s+employees|team\s+of\s+(\d+)/i);
-        if (matches) {
-          const num = parseInt(matches[1] || matches[2]);
-          if (!isNaN(num)) {
-            if (num <= 10) value = "1-10";
-            else if (num <= 50) value = "11-50";
-            else if (num <= 200) value = "51-200";
-            else if (num <= 1000) value = "201-1000";
-            else value = "1000+";
-            evidence.push({ snippet: matches[0], source_url: chunk.source_url, page_type: chunk.page_type, offset: chunk.text_offset });
-            break;
-          }
-        }
-      }
-      break;
-    }
-  }
-  
-  if (!value) return null;
-  
-  return { field, value, confidence, evidence, resolver: "rules" };
-}
-
-function crossPageResolver(field: FieldName, siteData: SiteData): Candidate | null {
-  const preferredTypes: Record<FieldName, string[]> = {
-    industry: ["about", "company", "homepage"],
-    company_size: ["about", "team", "press"],
-    hq_location: ["contact", "about"],
-    usp: ["about", "company", "homepage"],
-    offerings: ["homepage", "about"],
-    target_audience: ["about", "homepage"]
-  };
-  
-  const types = preferredTypes[field] || [];
-  const relevantChunks = siteData.chunks
-    .filter(c => types.includes(c.page_type))
-    .slice(0, 5);
-  
-  if (relevantChunks.length === 0) return null;
-  
-  let value: string | null = null;
-  const evidence: Evidence[] = [];
-  
-  for (const chunk of relevantChunks) {
-    const text = chunk.text.toLowerCase();
-    
-    if (field === "industry" && !value) {
-      if (text.includes("software") || text.includes("saas")) {
-        value = "Software";
-        evidence.push({ snippet: chunk.text.slice(0, 100), source_url: chunk.source_url, page_type: chunk.page_type });
-      }
-    }
-    
-    if (field === "hq_location" && !value) {
-      const match = chunk.text.match(/(?:headquarters|hq|located|based)[\s:]+([A-Z][a-zA-Z\s,]+)/i);
-      if (match) {
-        value = match[1].trim();
-        evidence.push({ snippet: match[0], source_url: chunk.source_url, page_type: chunk.page_type });
-      }
-    }
-  }
-  
-  if (!value) return null;
-  
-  return { field, value, confidence: "medium", evidence, resolver: "cross_page" };
-}
-
-function renderedHomeResolver(field: FieldName, siteData: SiteData): Candidate | null {
-  if (!siteData.renderedHomeText) return null;
-  if (!["industry", "usp", "offerings"].includes(field)) return null;
-  
-  const text = siteData.renderedHomeText.toLowerCase();
-  let value: string | null = null;
-  const evidence: Evidence[] = [];
-  
-  if (field === "industry") {
-    if (text.includes("software") || text.includes("saas")) {
-      value = "Software";
-      evidence.push({ snippet: siteData.renderedHomeText.slice(0, 100), source_url: siteData.url, page_type: "homepage" });
-    }
-  }
-  
-  if (!value) return null;
-  
-  return { field, value, confidence: "medium", evidence, resolver: "rendered_home" };
-}
-
-// ==================== MAIN ====================
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -951,125 +520,283 @@ serve(async (req) => {
 
   try {
     const { url } = await req.json();
-    if (!url) {
-      return new Response(JSON.stringify({ ok: false, error: { code: "MISSING_URL", message: "URL is required" } }), {
+
+    if (!url || typeof url !== 'string') {
+      return new Response(JSON.stringify({
+        ok: false,
+        error: { code: 'INVALID_URL', message: 'Invalid URL provided' }
+      }), {
         status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
-
     const normalizedUrl = normalizeUrl(url);
-    console.log(`Analyzing URL: ${normalizedUrl}`);
-    
-    console.log("Stage: Crawling site...");
-    const { pages: pageCount, chunks: chunkCount, truncated } = await crawlSite(normalizedUrl, supabase);
-    console.log(`Crawled ${pageCount} pages, created ${chunkCount} chunks`);
-    
-    const { data: pagesData } = await supabase
-      .from("pages")
-      .select("*")
-      .eq("origin", new URL(normalizedUrl).origin);
-    
-    const { data: chunksData } = await supabase
-      .from("chunks")
-      .select("*")
-      .eq("url", normalizedUrl);
-    
-    const siteData: SiteData = {
-      pages: pagesData || [],
-      chunks: chunksData || [],
-      url: normalizedUrl
+    console.log('Analyzing URL:', normalizedUrl);
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Stage 1: Crawl site
+    console.log('Stage: Crawling site...');
+    const { pages, chunks, truncated } = await crawlSite(normalizedUrl, supabase);
+
+    if (pages.length === 0 || chunks.length === 0) {
+      return new Response(JSON.stringify({
+        ok: false,
+        error: {
+          code: 'EMPTY_SITE',
+          message: "We couldn't find readable pages on this site."
+        }
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    console.log(`Crawled ${pages.length} pages, created ${chunks.length} chunks`);
+
+    // Stage 2: Select best chunks
+    const selectedChunks = selectBestChunks(chunks, MAX_CHUNKS_FOR_LLM);
+    console.log(`Selected ${selectedChunks.length} chunks for extraction`);
+
+    // Stage 3: Extract contacts
+    console.log('Stage: Extracting contacts...');
+    const emails = new Set<string>();
+    const phones = new Set<string>();
+    const socials: { linkedin: string | null; twitter: string | null; facebook: string | null; instagram: string | null } = {
+      linkedin: null,
+      twitter: null,
+      facebook: null,
+      instagram: null
     };
-    
-    console.log("Stage: AI extraction...");
-    
-    const fields: FieldName[] = ["industry", "company_size", "hq_location", "usp", "offerings", "target_audience"];
-    const results: Record<string, any> = {};
-    const resolversUsed: Record<string, string> = {};
-    const debugInfo: any = ANALYZE_DEBUG ? {} : undefined;
-    
-    for (const field of fields) {
-      const candidates = (await Promise.all([
-        extractorResolver(field, siteData),
-        classifierResolver(field, siteData),
-        metadataResolver(field, siteData),
-        schemaResolver(field, siteData),
-        rulesResolver(field, siteData),
-        crossPageResolver(field, siteData),
-        renderedHomeResolver(field, siteData)
-      ])).filter(Boolean) as Candidate[];
-      
-      const { winner, used } = mergeCandidates(field, candidates);
-      
-      results[field] = {
-        value: winner.value,
-        confidence: winner.confidence,
-        evidence: (winner.evidence || []).slice(0, 3)
-      };
-      resolversUsed[field] = winner.resolver;
-      
-      if (ANALYZE_DEBUG) {
-        debugInfo[field] = {
-          candidates: used.map(c => ({ resolver: c.resolver, confidence: c.confidence, value: c.value })),
-          winner: { resolver: winner.resolver, confidence: winner.confidence }
-        };
+
+    // Extract from homepage chunks
+    const homepageChunks = chunks.filter(c => c.page_type === "homepage");
+    const homepageText = homepageChunks.map(c => c.text).join(" ");
+
+    // Extract emails
+    const emailMatches = homepageText.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g);
+    for (const match of emailMatches) {
+      emails.add(match[0].toLowerCase());
+    }
+
+    // Extract phones
+    const phoneMatches = homepageText.matchAll(/[\+\(]?[1-9][\d\s\-\(\)\.]{7,}\d/g);
+    for (const match of phoneMatches) {
+      const cleaned = match[0].replace(/\s+/g, '');
+      if (cleaned.length >= 10) {
+        phones.add(match[0]);
       }
     }
-    
-    console.log("Stage: Extracting contacts...");
-    const contacts = await extractContacts(normalizedUrl, supabase);
-    
-    const companyName = siteData.pages.find(p => p.page_type === "homepage")?.meta?.og_site_name || 
-                        siteData.pages.find(p => p.page_type === "homepage")?.meta?.title || 
-                        new URL(normalizedUrl).hostname.replace("www.", "");
-    
-    console.log("Stage: Persisting to database...");
-    
-    const companyCard = {
-      name: companyName,
-      url: normalizedUrl,
-      industry: results.industry,
-      company_size: results.company_size,
-      hq_location: results.hq_location,
-      usp: results.usp,
-      offerings: results.offerings.value || [],
-      offerings_bulleted: [],
-      target_audience: results.target_audience,
-      target_audience_list: [],
-      contacts,
-      resolvers: resolversUsed,
-      analyzed_at: new Date().toISOString()
+
+    // Extract social links
+    const linkMatches = homepageText.matchAll(/https?:\/\/[^\s"'<>]+/gi);
+    for (const match of linkMatches) {
+      const href = match[0].toLowerCase();
+      if (href.includes('linkedin.com') && !socials.linkedin) socials.linkedin = match[0];
+      else if ((href.includes('twitter.com') || href.includes('x.com')) && !socials.twitter) socials.twitter = match[0];
+      else if (href.includes('facebook.com') && !socials.facebook) socials.facebook = match[0];
+      else if (href.includes('instagram.com') && !socials.instagram) socials.instagram = match[0];
+    }
+
+    // Stage 4: AI extraction
+    console.log('Stage: AI extraction...');
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+
+    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        messages: [
+          {
+            role: 'system',
+            content: 'You extract company info from text chunks that may come from any page (homepage, about, company, team, contact, pricing, press, docs, blog). Prefer facts from about/company pages for size, HQ, leadership. Return ONLY valid JSON, no commentary.'
+          },
+          {
+            role: 'user',
+            content: `URL: ${normalizedUrl}\n\nChunks (from ${pages.length} pages):\n${JSON.stringify(selectedChunks.slice(0, 20).map(c => ({ chunk_id: c.chunk_id, text: c.text, source_url: c.source_url, page_type: c.page_type })))}\n\nExtract and return JSON:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)"]\n}`
+          }
+        ],
+        temperature: 0.3
+      })
+    });
+
+    if (!aiResponse.ok) {
+      const errorText = await aiResponse.text();
+      console.error('AI API error:', errorText);
+      throw new Error(`AI extraction failed: ${aiResponse.status}`);
+    }
+
+    const aiData = await aiResponse.json();
+    let extractedData;
+
+    try {
+      const content = aiData.choices[0].message.content;
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      extractedData = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+    } catch (parseError) {
+      console.error('Failed to parse AI response, retrying...');
+      // Simple retry logic
+      const retryResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-flash',
+          messages: [
+            {
+              role: 'system',
+              content: 'Return ONLY valid JSON, no markdown, no commentary.'
+            },
+            {
+              role: 'user',
+              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching the schema.`
+            }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      const retryData = await retryResponse.json();
+      const retryContent = retryData.choices[0].message.content;
+      const retryMatch = retryContent.match(/\{[\s\S]*\}/);
+      extractedData = JSON.parse(retryMatch ? retryMatch[0] : retryContent);
+    }
+
+    // Transform offerings
+    const offeringsRaw = extractedData.offerings_raw || [];
+    const offeringBullets = toShortBulletsFromOfferings(
+      offeringsRaw.map((o: any) => o.snippet || o)
+    );
+    const offerings_bulleted = offeringBullets.map((bullet, idx) => {
+      const rawItem = offeringsRaw[idx] || {};
+      return {
+        bullet,
+        details: compressDetails(rawItem.details || bullet, 180),
+        evidence: rawItem.evidence || (rawItem.snippet ? [{
+          snippet: rawItem.snippet,
+          source_url: rawItem.source_url || normalizedUrl,
+          page_type: rawItem.page_type || "homepage",
+          offset: rawItem.offset || 0
+        }] : [])
+      };
+    });
+
+    // Transform target audience
+    const targetAudienceRaw = extractedData.target_audience_raw || [];
+    const target_audience_list = toShortBulletsFromOfferings(targetAudienceRaw, 12);
+
+    // Sanitize socials
+    const sanitizedSocials = {
+      linkedin: sanitizeSocial(socials.linkedin),
+      twitter: sanitizeSocial(socials.twitter),
+      facebook: sanitizeSocial(socials.facebook),
+      instagram: sanitizeSocial(socials.instagram)
     };
-    
-    await supabase.from("company_cards").upsert(companyCard);
-    
-    console.log("Analysis complete");
-    
-    return new Response(JSON.stringify({ 
-      ok: true, 
+
+    // Build CompanyCard
+    const analyzed_at = new Date().toISOString();
+    const companyCard = {
+      name: extractedData.name || new URL(normalizedUrl).hostname,
+      url: normalizedUrl,
+      industry: extractedData.industry || { value: null, confidence: 'low', evidence: [] },
+      company_size: extractedData.company_size || { value: null, confidence: 'low', evidence: [] },
+      hq_location: extractedData.hq_location || { value: null, confidence: 'low', evidence: [] },
+      usp: extractedData.usp || { value: null, confidence: 'low', evidence: [] },
+      offerings: offeringsRaw,
+      offerings_bulleted,
+      target_audience: extractedData.target_audience || { value: null, confidence: 'low', evidence: [] },
+      target_audience_list,
+      contacts: {
+        emails: Array.from(emails),
+        phones: Array.from(phones),
+        socials: sanitizedSocials
+      },
+      analyzed_at
+    };
+
+    console.log('Stage: Persisting to database...');
+
+    // Delete old chunks
+    await supabase.from('chunks').delete().eq('url', normalizedUrl);
+
+    // Insert new chunks
+    const chunksToInsert = chunks.map(chunk => ({
+      page_id: chunk.page_id,
+      url: normalizedUrl,
+      chunk_id: chunk.chunk_id,
+      text: chunk.text,
+      text_offset: chunk.text_offset,
+      source_url: chunk.source_url,
+      path: chunk.path,
+      page_type: chunk.page_type
+    }));
+
+    const { error: chunksError } = await supabase.from('chunks').insert(chunksToInsert);
+    if (chunksError) {
+      console.error('Error inserting chunks:', chunksError);
+    }
+
+    // Upsert company card
+    const { error: cardError } = await supabase.from('company_cards').upsert({
+      url: normalizedUrl,
+      name: companyCard.name,
+      industry: companyCard.industry,
+      company_size: companyCard.company_size,
+      hq_location: companyCard.hq_location,
+      usp: companyCard.usp,
+      offerings: companyCard.offerings,
+      target_audience: companyCard.target_audience,
+      contacts: companyCard.contacts,
+      analyzed_at: companyCard.analyzed_at,
+      analysis_json: {
+        ...companyCard,
+        offerings_bulleted: companyCard.offerings_bulleted,
+        target_audience_list: companyCard.target_audience_list
+      }
+    });
+
+    if (cardError) {
+      console.error('Error upserting company card:', cardError);
+      throw cardError;
+    }
+
+    console.log('Analysis complete');
+    return new Response(JSON.stringify({
+      ok: true,
       data: companyCard,
-      crawl: { total_pages: pageCount, total_chunks: chunkCount, truncated },
-      ...(ANALYZE_DEBUG ? { debug: debugInfo } : {})
+      crawl: {
+        total_pages: pages.length,
+        total_chunks: chunks.length,
+        truncated
+      }
     }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" }
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
     console.error('Error in analyze function:', error);
-    return new Response(JSON.stringify({ 
-      ok: false, 
-      error: { 
-        code: "ANALYSIS_ERROR", 
-        message: error instanceof Error ? error.message : "Unknown error" 
-      } 
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+    const errorMessage = error instanceof Error ? error.message : 'Failed to analyze website. Please try another URL.';
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: errorMessage
+        }
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
   }
 });
