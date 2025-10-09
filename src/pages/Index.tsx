@@ -67,23 +67,23 @@ const Index = () => {
 
     setState("loading");
     setErrorMessage("");
-    setCrawlProgress({ stage: "discovering", current: 0, total: 0 });
+    setCrawlProgress({ stage: "fetching", current: 0, total: 0 });
 
     try {
-      // Simulate progress updates (in production, this would be real-time via websockets)
+      // Simulate progress updates
       const progressInterval = setInterval(() => {
         setCrawlProgress(prev => {
           if (!prev) return null;
-          if (prev.stage === "discovering") {
-            return { stage: "crawling", current: 0, total: 50 };
-          } else if (prev.stage === "crawling" && prev.current < prev.total) {
-            return { ...prev, current: prev.current + 5 };
-          } else if (prev.stage === "crawling") {
+          if (prev.stage === "fetching") {
+            return { stage: "parsing", current: 0, total: 0 };
+          } else if (prev.stage === "parsing") {
             return { stage: "extracting", current: 0, total: 0 };
+          } else if (prev.stage === "extracting") {
+            return { stage: "summarising", current: 0, total: 0 };
           }
           return prev;
         });
-      }, 1000);
+      }, 1500);
 
       const { data, error } = await supabase.functions.invoke('analyze', {
         body: { url: url.trim() }

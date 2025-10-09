@@ -2,14 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
-// Config caps
-const CRAWL_MAX_PAGES = 250;
-const CRAWL_MAX_DEPTH = 4;
-const CRAWL_MAX_PER_SECTION = 80;
-const REQUEST_DELAY_MS = 500;
 const FETCH_TIMEOUT_MS = 15000;
-const MAX_CHUNKS_FOR_LLM = 60;
-const MIN_TEXT_LEN = 1200;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -30,227 +23,6 @@ function normalizeUrl(input: string): string {
   } catch {
     return url;
   }
-}
-
-async function fetchText(url: string, headers?: Record<string, string>): Promise<{ ok: boolean; status: number; url: string; text: string }> {
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FirmableDemo/1.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-AU,en;q=0.9",
-        ...headers
-      }
-    });
-    return { ok: res.ok, status: res.status, url: res.url, text: await res.text() };
-  } catch (err) {
-    console.error(`Fetch error for ${url}:`, err);
-    return { ok: false, status: 0, url, text: "" };
-  }
-}
-
-async function tryRobots(base: URL): Promise<string | null> {
-  try {
-    const r = await fetchText(new URL("/robots.txt", base).toString());
-    if (!r.ok) return null;
-    return r.text;
-  } catch { return null; }
-}
-
-function allowedByRobots(robotsTxt: string | null, path: string): boolean {
-  if (!robotsTxt) return true;
-  const lines = robotsTxt.split(/\r?\n/).map(l => l.trim());
-  const disallow: string[] = [];
-  for (const line of lines) {
-    if (/^disallow:/i.test(line)) {
-      const p = line.split(":")[1]?.trim() || "";
-      if (p) disallow.push(p);
-    }
-  }
-  return !disallow.some(rule => path.startsWith(rule));
-}
-
-function classifyPath(pathname: string): string {
-  const p = pathname.toLowerCase();
-  if (p === "/" || p === "") return "homepage";
-  if (/about|about-us|who-we-are|company/.test(p)) return "about";
-  if (/team|leadership|founders|board/.test(p)) return "team";
-  if (/contact|get-in-touch|support/.test(p)) return "contact";
-  if (/pricing|plans/.test(p)) return "pricing";
-  if (/press|news|media|investors/.test(p)) return "press";
-  if (/blog|articles|insights|resources/.test(p)) return "blog";
-  if (/docs|documentation|developers|api/.test(p)) return "docs";
-  if (/careers|jobs|join/.test(p)) return "career";
-  if (/privacy|terms|legal/.test(p)) return "legal";
-  return "other";
-}
-
-// Sitemap discovery and parsing
-async function discoverSitemap(baseUrl: URL): Promise<{ urls: string[]; via: string }> {
-  const sitemapPaths = [
-    "/sitemap.xml",
-    "/sitemap_index.xml",
-    "/sitemap.txt",
-    "/sitemap/sitemap.xml",
-    "/sitemap.xml.gz"
-  ];
-
-  for (const path of sitemapPaths) {
-    try {
-      const sitemapUrl = new URL(path, baseUrl).toString();
-      console.log(`Trying sitemap: ${sitemapUrl}`);
-      const res = await fetchText(sitemapUrl);
-      
-      if (res.ok && res.text.length > 0) {
-        // Check if it's gzipped
-        if (path.endsWith('.gz')) {
-          // Skip .gz for MVP - would need decompression library
-          continue;
-        }
-
-        // Check if it's a sitemap index
-        if (res.text.includes('<sitemapindex')) {
-          const childSitemaps = res.text.matchAll(/<loc>([^<]+)<\/loc>/gi);
-          const allUrls: string[] = [];
-          
-          for (const match of childSitemaps) {
-            const childUrl = match[1].trim();
-            if (childUrl.startsWith(baseUrl.origin)) {
-              try {
-                const childRes = await fetchText(childUrl);
-                if (childRes.ok) {
-                  const childUrls = extractUrlsFromSitemap(childRes.text, baseUrl.origin);
-                  allUrls.push(...childUrls);
-                }
-              } catch (err) {
-                console.error(`Error fetching child sitemap ${childUrl}:`, err);
-              }
-            }
-          }
-          
-          if (allUrls.length > 0) {
-            return { urls: allUrls.slice(0, CRAWL_MAX_PAGES), via: "sitemap" };
-          }
-        } else {
-          // Regular sitemap
-          const urls = extractUrlsFromSitemap(res.text, baseUrl.origin);
-          if (urls.length > 0) {
-            return { urls: urls.slice(0, CRAWL_MAX_PAGES), via: "sitemap" };
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`Error checking sitemap ${path}:`, err);
-    }
-  }
-
-  return { urls: [], via: "fallback" };
-}
-
-function extractUrlsFromSitemap(xml: string, origin: string): string[] {
-  const urls: string[] = [];
-  const locMatches = xml.matchAll(/<loc>([^<]+)<\/loc>/gi);
-  
-  for (const match of locMatches) {
-    const url = match[1].trim();
-    try {
-      const u = new URL(url);
-      if (u.origin === origin) {
-        urls.push(normalizeUrl(url));
-      }
-    } catch {
-      // Invalid URL, skip
-    }
-  }
-  
-  return [...new Set(urls)]; // dedupe
-}
-
-// BFS crawl fallback
-async function bfsCrawl(baseUrl: URL, robotsTxt: string | null): Promise<string[]> {
-  const visited = new Set<string>([baseUrl.pathname]);
-  const queue: Array<{ url: URL; depth: number }> = [{ url: baseUrl, depth: 0 }];
-  const result: string[] = [baseUrl.toString()];
-  
-  console.log("Starting BFS fallback crawl...");
-
-  while (queue.length > 0 && result.length < CRAWL_MAX_PAGES) {
-    const { url, depth } = queue.shift()!;
-    
-    if (depth >= CRAWL_MAX_DEPTH) continue;
-
-    try {
-      await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
-      const res = await fetchText(url.toString());
-      
-      if (!res.ok) continue;
-
-      // Extract links
-      const linkMatches = res.text.matchAll(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi);
-      const candidates: Array<{ url: URL; text: string; score: number }> = [];
-
-      for (const match of linkMatches) {
-        const href = match[1];
-        const anchorText = match[2];
-        
-        try {
-          const candidateUrl = new URL(href, url);
-          if (candidateUrl.origin !== baseUrl.origin) continue;
-          if (visited.has(candidateUrl.pathname)) continue;
-          if (!allowedByRobots(robotsTxt, candidateUrl.pathname)) continue;
-          
-          // Skip unwanted paths
-          if (/\.(pdf|docx?|zip|jpg|jpeg|png|svg|mp4|webm)(\?|$)/i.test(candidateUrl.pathname)) continue;
-          if (/login|cart|checkout|search/.test(candidateUrl.pathname)) continue;
-
-          const score = scoreLink(anchorText, candidateUrl.pathname);
-          if (score > -5) {
-            candidates.push({ url: candidateUrl, text: anchorText, score });
-          }
-        } catch {
-          // Invalid URL, skip
-        }
-      }
-
-      // Sort by score and add to queue
-      candidates.sort((a, b) => b.score - a.score);
-      for (const candidate of candidates.slice(0, 10)) {
-        if (!visited.has(candidate.url.pathname)) {
-          visited.add(candidate.url.pathname);
-          queue.push({ url: candidate.url, depth: depth + 1 });
-          result.push(candidate.url.toString());
-          
-          if (result.length >= CRAWL_MAX_PAGES) break;
-        }
-      }
-    } catch (err) {
-      console.error(`BFS error for ${url}:`, err);
-    }
-  }
-
-  return result;
-}
-
-function scoreLink(anchorText: string, pathname: string): number {
-  const t = (anchorText || "").toLowerCase();
-  const p = (pathname || "").toLowerCase();
-  let s = 0;
-  
-  // Prioritize important sections
-  if (/about|company|who-we-are|team|leadership|contact|pricing|press|media|investors/.test(t + p)) s += 5;
-  if (/about|company/.test(p)) s += 3;
-  if (/team|leadership/.test(p)) s += 3;
-  
-  // Prefer shorter paths
-  if ((p.match(/\//g) || []).length <= 2) s += 2;
-  
-  // Penalize
-  if (/login|cart|checkout|privacy|terms/.test(p)) s -= 5;
-  
-  return s;
 }
 
 async function robustFetch(url: string) {
@@ -291,187 +63,6 @@ async function robustFetch(url: string) {
   }
 
   return { ok: true, html: body, finalUrl: res.url };
-}
-
-// Main crawl function
-async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; chunks: any[]; truncated: boolean }> {
-  const startTime = Date.now();
-  const MAX_CRAWL_TIME = 90000; // 90 seconds
-  
-  const normalizedUrl = normalizeUrl(url);
-  const baseUrl = new URL(normalizedUrl);
-  
-  console.log("Loading robots.txt...");
-  const robotsTxt = await tryRobots(baseUrl);
-  
-  console.log("Discovering sitemap...");
-  const { urls, via } = await discoverSitemap(baseUrl);
-  
-  let urlList: string[];
-  if (urls.length > 0) {
-    console.log(`Found ${urls.length} URLs via sitemap`);
-    urlList = urls;
-  } else {
-    console.log("No sitemap found, using BFS fallback");
-    urlList = await bfsCrawl(baseUrl, robotsTxt);
-    console.log(`BFS found ${urlList.length} URLs`);
-  }
-
-  // Track per-section counts
-  const sectionCounts: Record<string, number> = {};
-  const pages: any[] = [];
-  const chunks: any[] = [];
-  let chunkIndex = 0;
-  let truncated = false;
-
-  console.log(`Crawling ${urlList.length} pages...`);
-
-  for (let i = 0; i < urlList.length; i++) {
-    if (Date.now() - startTime > MAX_CRAWL_TIME) {
-      console.log("Time limit reached, truncating");
-      truncated = true;
-      break;
-    }
-
-    const pageUrl = urlList[i];
-    const pageUrlObj = new URL(pageUrl);
-    const pageType = classifyPath(pageUrlObj.pathname);
-
-    // Check section cap
-    if (sectionCounts[pageType] >= CRAWL_MAX_PER_SECTION) {
-      console.log(`Skipping ${pageUrl} - section ${pageType} cap reached`);
-      continue;
-    }
-
-    try {
-      // Polite delay
-      if (i > 0) await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
-
-      const fetchResult = await robustFetch(pageUrl);
-      
-      if (!fetchResult.ok) {
-        // Store as blocked
-        await supabase.from('pages').upsert({
-          url: pageUrl,
-          origin: baseUrl.origin,
-          path: pageUrlObj.pathname,
-          page_type: pageType,
-          status_code: 0,
-          blocked: true,
-          content_len: 0
-        });
-        continue;
-      }
-
-      // Clean HTML
-      let cleanedHtml = fetchResult.html!.replace(/<script[\s\S]*?<\/script>/gi, '');
-      cleanedHtml = cleanedHtml.replace(/<style[\s\S]*?<\/style>/gi, '');
-      cleanedHtml = cleanedHtml.replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
-      const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-      if (textContent.length < MIN_TEXT_LEN) {
-        console.log(`Skipping ${pageUrl} - too short`);
-        continue;
-      }
-
-      // Calculate hash
-      const encoder = new TextEncoder();
-      const data = encoder.encode(textContent);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const contentHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-      // Store page
-      const { data: pageData, error: pageError } = await supabase.from('pages').upsert({
-        url: pageUrl,
-        origin: baseUrl.origin,
-        path: pageUrlObj.pathname,
-        page_type: pageType,
-        status_code: 200,
-        content_hash: contentHash,
-        content_len: textContent.length,
-        blocked: false
-      }).select().single();
-
-      if (pageError) {
-        console.error("Error storing page:", pageError);
-        continue;
-      }
-
-      pages.push(pageData);
-      sectionCounts[pageType] = (sectionCounts[pageType] || 0) + 1;
-
-      // Chunk text
-      const chunkSize = 750;
-      let offset = 0;
-      while (offset < textContent.length) {
-        const chunkText = textContent.slice(offset, offset + chunkSize);
-        chunks.push({
-          page_id: pageData.id,
-          url: normalizedUrl,
-          chunk_id: `c${chunkIndex + 1}`,
-          text: chunkText,
-          text_offset: offset,
-          source_url: pageUrl,
-          path: pageUrlObj.pathname,
-          page_type: pageType
-        });
-        offset += chunkSize;
-        chunkIndex++;
-      }
-
-      console.log(`Crawled ${i + 1}/${urlList.length}: ${pageUrl} (${pageType})`);
-
-    } catch (err) {
-      console.error(`Error crawling ${pageUrl}:`, err);
-    }
-  }
-
-  return { pages, chunks, truncated };
-}
-
-// Select best chunks for LLM
-function selectBestChunks(chunks: any[], maxChunks: number): any[] {
-  const keywords = [
-    "industry", "customers", "pricing", "team", "about", "mission",
-    "headquarters", "hq", "location", "employees", "subscription",
-    "billing", "identity", "compliance", "founded", "leader"
-  ];
-
-  const scored = chunks.map(chunk => {
-    let score = 0;
-    
-    // Page type scoring
-    if (["about", "company", "team", "contact", "pricing", "press"].includes(chunk.page_type)) score += 5;
-    if (chunk.page_type === "homepage") score += 3;
-    if (["legal", "privacy", "terms"].includes(chunk.page_type)) score -= 2;
-    
-    // Keyword scoring
-    const text = chunk.text.toLowerCase();
-    for (const kw of keywords) {
-      if (text.includes(kw)) score += 1;
-    }
-    
-    return { chunk, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-
-  // Limit chunks per page type for diversity
-  const typeCount: Record<string, number> = {};
-  const selected: any[] = [];
-
-  for (const { chunk } of scored) {
-    if (selected.length >= maxChunks) break;
-    
-    const count = typeCount[chunk.page_type] || 0;
-    if (count >= 20) continue;
-    
-    selected.push(chunk);
-    typeCount[chunk.page_type] = count + 1;
-  }
-
-  return selected;
 }
 
 // Helper functions for data transformation
@@ -538,16 +129,16 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Stage 1: Crawl site
-    console.log('Stage: Crawling site...');
-    const { pages, chunks, truncated } = await crawlSite(normalizedUrl, supabase);
-
-    if (pages.length === 0 || chunks.length === 0) {
+    // Stage 1: Fetch homepage HTML
+    console.log('Stage: Fetching homepage...');
+    const fetchResult = await robustFetch(normalizedUrl);
+    
+    if (!fetchResult.ok || !fetchResult.html || fetchResult.html.length < 800) {
       return new Response(JSON.stringify({
         ok: false,
         error: {
-          code: 'EMPTY_SITE',
-          message: "We couldn't find readable pages on this site."
+          code: 'FETCH_FAILED',
+          message: "We couldn't read this homepage."
         }
       }), {
         status: 200,
@@ -555,13 +146,45 @@ serve(async (req) => {
       });
     }
 
-    console.log(`Crawled ${pages.length} pages, created ${chunks.length} chunks`);
+    // Stage 2: Clean & extract visible text
+    console.log('Stage: Parsing content...');
+    const cleanedHtml = fetchResult.html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+    
+    const cleanText = cleanedHtml
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    // Stage 2: Select best chunks
-    const selectedChunks = selectBestChunks(chunks, MAX_CHUNKS_FOR_LLM);
-    console.log(`Selected ${selectedChunks.length} chunks for extraction`);
+    if (cleanText.length < 800) {
+      return new Response(JSON.stringify({
+        ok: false,
+        error: {
+          code: 'EMPTY_CONTENT',
+          message: "This homepage has very little readable content."
+        }
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
-    // Stage 3: Extract contacts
+    console.log(`Extracted ${cleanText.length} characters of text`);
+
+    // Stage 3: Chunk text (700-800 chars per chunk)
+    const chunks: { text: string; offset: number }[] = [];
+    for (let i = 0; i < cleanText.length; i += 750) {
+      chunks.push({ 
+        text: cleanText.slice(i, i + 750), 
+        offset: i 
+      });
+    }
+
+    console.log(`Created ${chunks.length} chunks`);
+
+    // Stage 4: Extract contacts from homepage
     console.log('Stage: Extracting contacts...');
     const emails = new Set<string>();
     const phones = new Set<string>();
@@ -572,18 +195,14 @@ serve(async (req) => {
       instagram: null
     };
 
-    // Extract from homepage chunks
-    const homepageChunks = chunks.filter(c => c.page_type === "homepage");
-    const homepageText = homepageChunks.map(c => c.text).join(" ");
-
     // Extract emails
-    const emailMatches = homepageText.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g);
+    const emailMatches = cleanText.matchAll(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g);
     for (const match of emailMatches) {
       emails.add(match[0].toLowerCase());
     }
 
     // Extract phones
-    const phoneMatches = homepageText.matchAll(/[\+\(]?[1-9][\d\s\-\(\)\.]{7,}\d/g);
+    const phoneMatches = cleanText.matchAll(/[\+\(]?[1-9][\d\s\-\(\)\.]{7,}\d/g);
     for (const match of phoneMatches) {
       const cleaned = match[0].replace(/\s+/g, '');
       if (cleaned.length >= 10) {
@@ -591,8 +210,8 @@ serve(async (req) => {
       }
     }
 
-    // Extract social links
-    const linkMatches = homepageText.matchAll(/https?:\/\/[^\s"'<>]+/gi);
+    // Extract social links from HTML
+    const linkMatches = fetchResult.html.matchAll(/https?:\/\/[^\s"'<>]+/gi);
     for (const match of linkMatches) {
       const href = match[0].toLowerCase();
       if (href.includes('linkedin.com') && !socials.linkedin) socials.linkedin = match[0];
@@ -601,7 +220,7 @@ serve(async (req) => {
       else if (href.includes('instagram.com') && !socials.instagram) socials.instagram = match[0];
     }
 
-    // Stage 4: AI extraction
+    // Stage 5: AI extraction
     console.log('Stage: AI extraction...');
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
 
@@ -616,11 +235,11 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You extract company info from text chunks that may come from any page (homepage, about, company, team, contact, pricing, press, docs, blog). Prefer facts from about/company pages for size, HQ, leadership. Return ONLY valid JSON, no commentary.'
+            content: 'You are a structured data extractor. Analyze only the homepage text. Extract fields: industry, company_size, hq_location, usp, offerings, target_audience, contacts. Provide 1-2 evidence snippets per field from the homepage. Return ONLY valid JSON, no commentary.'
           },
           {
             role: 'user',
-            content: `URL: ${normalizedUrl}\n\nChunks (from ${pages.length} pages):\n${JSON.stringify(selectedChunks.slice(0, 20).map(c => ({ chunk_id: c.chunk_id, text: c.text, source_url: c.source_url, page_type: c.page_type })))}\n\nExtract and return JSON:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)"]\n}`
+            content: `URL: ${normalizedUrl}\n\nHomepage Chunks:\n${JSON.stringify(chunks.slice(0, 12).map((c, idx) => ({ chunk_id: `c${idx + 1}`, text: c.text, offset: c.offset })))}\n\nExtract and return JSON:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)"]\n}`
           }
         ],
         temperature: 0.3
@@ -683,8 +302,8 @@ serve(async (req) => {
         details: compressDetails(rawItem.details || bullet, 180),
         evidence: rawItem.evidence || (rawItem.snippet ? [{
           snippet: rawItem.snippet,
-          source_url: rawItem.source_url || normalizedUrl,
-          page_type: rawItem.page_type || "homepage",
+          source_url: normalizedUrl,
+          page_type: "homepage",
           offset: rawItem.offset || 0
         }] : [])
       };
@@ -729,15 +348,14 @@ serve(async (req) => {
     await supabase.from('chunks').delete().eq('url', normalizedUrl);
 
     // Insert new chunks
-    const chunksToInsert = chunks.map(chunk => ({
-      page_id: chunk.page_id,
+    const chunksToInsert = chunks.map((chunk, idx) => ({
       url: normalizedUrl,
-      chunk_id: chunk.chunk_id,
+      chunk_id: `c${idx + 1}`,
       text: chunk.text,
-      text_offset: chunk.text_offset,
-      source_url: chunk.source_url,
-      path: chunk.path,
-      page_type: chunk.page_type
+      text_offset: chunk.offset,
+      source_url: normalizedUrl,
+      path: '/',
+      page_type: 'homepage'
     }));
 
     const { error: chunksError } = await supabase.from('chunks').insert(chunksToInsert);
@@ -772,12 +390,7 @@ serve(async (req) => {
     console.log('Analysis complete');
     return new Response(JSON.stringify({
       ok: true,
-      data: companyCard,
-      crawl: {
-        total_pages: pages.length,
-        total_chunks: chunks.length,
-        truncated
-      }
+      data: companyCard
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

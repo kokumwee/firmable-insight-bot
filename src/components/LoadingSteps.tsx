@@ -1,6 +1,6 @@
 import { Loader2 } from "lucide-react";
 
-const steps = ["Discovering", "Crawling", "Extracting", "Summarising"];
+const steps = ["Fetching", "Parsing", "Extracting", "Summarising"];
 
 interface LoadingStepsProps {
   progress?: {
@@ -34,22 +34,14 @@ export const LoadingSteps = ({ progress }: LoadingStepsProps) => {
             </div>
           ))}
         </div>
-        {progress && progress.total > 0 && (
+        {progress && (
           <div className="text-center space-y-2">
             <p className="text-sm text-muted-foreground">
-              {progress.stage === 'crawling' && `Crawling ${progress.current} of ~${progress.total} pages...`}
-              {progress.stage === 'discovering' && 'Discovering pages...'}
+              {progress.stage === 'fetching' && 'Fetching homepage content...'}
+              {progress.stage === 'parsing' && 'Parsing content...'}
               {progress.stage === 'extracting' && 'Extracting company data...'}
               {progress.stage === 'summarising' && 'Building company card...'}
             </p>
-            {progress.stage === 'crawling' && (
-              <div className="w-64 h-2 bg-muted rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-primary transition-all duration-300"
-                  style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
-                />
-              </div>
-            )}
           </div>
         )}
       </div>
