@@ -1,4 +1,5 @@
-import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone, Linkedin, Twitter, Facebook, Instagram } from "lucide-react";
+import { useState } from "react";
+import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone, Linkedin, Twitter, Facebook, Instagram, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -43,6 +44,9 @@ interface CompanyCardProps {
 }
 
 export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
+  const [isOfferingsExpanded, setIsOfferingsExpanded] = useState(false);
+  const [isAudienceExpanded, setIsAudienceExpanded] = useState(false);
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
   };
@@ -140,30 +144,117 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
         <Separator />
 
         {/* Offerings */}
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-muted-foreground">Offerings / Services</p>
-          <ul className="list-disc list-inside space-y-1">
-            {data.offerings.map((offering, idx) => (
-              <li key={idx} className="text-base">{offering.snippet}</li>
-            ))}
-          </ul>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-muted-foreground">💼 Offerings / Services</p>
+            {data.offerings.length > 0 && (
+              <button
+                onClick={() => setIsOfferingsExpanded(!isOfferingsExpanded)}
+                className="flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-all duration-200 hover:scale-[1.02]"
+                aria-expanded={isOfferingsExpanded}
+              >
+                {isOfferingsExpanded ? "Collapse" : "View More"}
+                <ChevronDown 
+                  className={`h-3.5 w-3.5 transition-transform duration-200 ease-in-out ${isOfferingsExpanded ? "rotate-180" : ""}`} 
+                />
+              </button>
+            )}
+          </div>
+          
+          {data.offerings.length > 0 ? (
+            <div className="relative">
+              <div 
+                className={`overflow-hidden transition-all duration-300 ease-in-out ${
+                  isOfferingsExpanded ? "max-h-[1000px] opacity-100" : "max-h-[140px] opacity-95"
+                }`}
+              >
+                <ul className="list-disc list-inside space-y-1">
+                  {(isOfferingsExpanded ? data.offerings : data.offerings.slice(0, 4)).map((offering, idx) => (
+                    <li key={idx} className="text-base">{offering.snippet}</li>
+                  ))}
+                </ul>
+              </div>
+              
+              {!isOfferingsExpanded && data.offerings.length > 4 && (
+                <div 
+                  className="absolute bottom-0 left-0 right-0 h-14 pointer-events-none rounded-b-lg"
+                  style={{
+                    background: "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,1) 80%)"
+                  }}
+                />
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground italic">No details available.</p>
+          )}
         </div>
 
         <Separator />
 
         {/* Target Audience */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <Target className="h-5 w-5 text-muted-foreground" />
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Target Audience</p>
-              <p className="text-base font-semibold">{data.target_audience.value}</p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Target className="h-5 w-5 text-muted-foreground" />
+              <p className="text-sm font-medium text-muted-foreground">🎯 Target Audience</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <ConfidenceBadge level={data.target_audience.confidence} />
+              <EvidencePopover evidence={data.target_audience.evidence} />
+              {data.target_audience.value && data.target_audience.value.length > 200 && (
+                <button
+                  onClick={() => setIsAudienceExpanded(!isAudienceExpanded)}
+                  className="flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 transition-all duration-200 hover:scale-[1.02]"
+                  aria-expanded={isAudienceExpanded}
+                >
+                  {isAudienceExpanded ? "Collapse" : "View More"}
+                  <ChevronDown 
+                    className={`h-3.5 w-3.5 transition-transform duration-200 ease-in-out ${isAudienceExpanded ? "rotate-180" : ""}`} 
+                  />
+                </button>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <ConfidenceBadge level={data.target_audience.confidence} />
-            <EvidencePopover evidence={data.target_audience.evidence} />
-          </div>
+
+          {data.target_audience.value ? (
+            <div className="relative">
+              <div 
+                className={`overflow-hidden transition-all duration-300 ease-in-out ${
+                  isAudienceExpanded ? "max-h-[1000px] opacity-100" : "max-h-[140px] opacity-95"
+                }`}
+              >
+                {isAudienceExpanded && /[,;]/.test(data.target_audience.value) ? (
+                  <div className="flex flex-wrap gap-2">
+                    {data.target_audience.value.split(/[,;]/).map((item, idx) => (
+                      <span 
+                        key={idx} 
+                        className="px-3 py-1.5 text-xs font-medium bg-muted text-foreground rounded-full"
+                      >
+                        {item.trim()}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-base leading-relaxed">
+                    {isAudienceExpanded 
+                      ? data.target_audience.value 
+                      : data.target_audience.value.slice(0, 200) + (data.target_audience.value.length > 200 ? "..." : "")}
+                  </p>
+                )}
+              </div>
+              
+              {!isAudienceExpanded && data.target_audience.value.length > 200 && (
+                <div 
+                  className="absolute bottom-0 left-0 right-0 h-14 pointer-events-none rounded-b-lg"
+                  style={{
+                    background: "linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,1) 80%)"
+                  }}
+                />
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground italic">No details available.</p>
+          )}
         </div>
 
         <Separator />
