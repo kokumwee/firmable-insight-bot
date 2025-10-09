@@ -149,6 +149,27 @@ export type Database = {
         }
         Relationships: []
       }
+      user_icp: {
+        Row: {
+          icp_json: Json
+          id: string
+          owner_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          icp_json: Json
+          id?: string
+          owner_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          icp_json?: Json
+          id?: string
+          owner_id?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

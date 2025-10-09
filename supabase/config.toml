@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.suggest-unverified]
 verify_jwt = false
+
+[functions.compute-icp-fit]
+verify_jwt = false
