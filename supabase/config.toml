@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.shortlist]
 verify_jwt = false
+
+[functions.neighbors]
+verify_jwt = false
