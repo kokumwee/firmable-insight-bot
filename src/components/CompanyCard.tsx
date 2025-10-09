@@ -2,6 +2,7 @@ import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone,
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { ConfidenceBadge, ConfidenceLevel } from "./ConfidenceBadge";
 import { EvidencePopover } from "./EvidencePopover";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -62,9 +63,10 @@ interface CompanyData {
 interface CompanyCardProps {
   data: CompanyData;
   onReanalyze: () => void;
+  icpFitRating?: number;
 }
 
-export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
+export const CompanyCard = ({ data, onReanalyze, icpFitRating }: CompanyCardProps) => {
   const { toast } = useToast();
   const [modalOpen, setModalOpen] = useState(false);
   const [suggestionData, setSuggestionData] = useState<any>(null);
@@ -145,20 +147,38 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
     return social;
   };
 
+  const getFitBadgeColor = (rating?: number): string => {
+    if (!rating) return "bg-muted text-muted-foreground";
+    if (rating <= 1) return "bg-red-500 text-white";
+    if (rating <= 2) return "bg-orange-500 text-white";
+    if (rating <= 3) return "bg-yellow-400 text-black";
+    if (rating <= 4) return "bg-lime-500 text-black";
+    return "bg-green-500 text-white";
+  };
+
   return (
     <Card className="w-full max-w-4xl mx-auto shadow-card hover:shadow-card-hover transition-shadow animate-slide-up">
       <CardHeader className="space-y-4">
-        <div className="space-y-2">
-          <h2 className="text-3xl font-bold text-foreground">{data.name}</h2>
-          <a
-            href={data.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-primary hover:underline"
-          >
-            {data.url}
-            <ExternalLink className="h-4 w-4" />
-          </a>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center gap-3">
+              <h2 className="text-3xl font-bold text-foreground">{data.name}</h2>
+              {icpFitRating !== undefined && (
+                <Badge className={`${getFitBadgeColor(icpFitRating)} font-semibold`}>
+                  ICP Fit {icpFitRating}/5
+                </Badge>
+              )}
+            </div>
+            <a
+              href={data.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+            >
+              {data.url}
+              <ExternalLink className="h-4 w-4" />
+            </a>
+          </div>
         </div>
       </CardHeader>
 

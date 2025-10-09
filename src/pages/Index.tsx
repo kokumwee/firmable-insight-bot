@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,6 +6,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
 import { ChatSection } from "@/components/ChatSection";
+import { IcpSettingsPanel } from "@/components/IcpSettingsPanel";
+import { FitIndicator } from "@/components/FitIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -52,6 +54,13 @@ const Index = () => {
   const [errorMessage, setErrorMessage] = useState("");
   const { toast } = useToast();
 
+  // ICP state
+  const [icpIndustries, setIcpIndustries] = useState("");
+  const [icpSize, setIcpSize] = useState("Any");
+  const [icpContinent, setIcpContinent] = useState("Any");
+  const [icpFitResult, setIcpFitResult] = useState<{ rating: number; explanation: string } | null>(null);
+  const [isCalculatingFit, setIsCalculatingFit] = useState(false);
+
   const handleAnalyze = async () => {
     if (!url.trim()) {
       toast({
@@ -87,13 +96,17 @@ const Index = () => {
         return;
       }
 
-      setCompanyData(data.data as CompanyData);
+      const companyDataResult = data.data as CompanyData;
+      setCompanyData(companyDataResult);
       setState("success");
       
       toast({
         title: "Analysis Complete",
         description: "Company data has been successfully analyzed.",
       });
+
+      // Calculate ICP fit after successful analysis
+      await calculateIcpFit(companyDataResult);
       
       setTimeout(() => {
         document.getElementById("results")?.scrollIntoView({ behavior: "smooth" });
@@ -140,6 +153,40 @@ const Index = () => {
     handleAnalyze();
   };
 
+  const calculateIcpFit = async (companyCard: CompanyData) => {
+    setIsCalculatingFit(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('calculate-icp-fit', {
+        body: {
+          companyCard,
+          icpIndustries,
+          icpSize,
+          icpContinent
+        }
+      });
+
+      if (error) throw error;
+
+      if (data.ok) {
+        setIcpFitResult(data.data);
+      } else {
+        throw new Error(data.error?.message || "Failed to calculate ICP fit");
+      }
+    } catch (error) {
+      console.error('ICP fit calculation error:', error);
+      setIcpFitResult({ rating: 0, explanation: "Error calculating fit" });
+    } finally {
+      setIsCalculatingFit(false);
+    }
+  };
+
+  // Recalculate fit when ICP settings change
+  useEffect(() => {
+    if (companyData && state === "success") {
+      calculateIcpFit(companyData);
+    }
+  }, [icpIndustries, icpSize, icpContinent]);
+
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-12">
@@ -177,6 +224,28 @@ const Index = () => {
           </div>
         </div>
 
+        {/* ICP Settings Panel */}
+        <div className="animate-slide-up">
+          <IcpSettingsPanel
+            industries={icpIndustries}
+            size={icpSize}
+            continent={icpContinent}
+            onIndustriesChange={setIcpIndustries}
+            onSizeChange={setIcpSize}
+            onContinentChange={setIcpContinent}
+          />
+        </div>
+
+        {/* Fit Indicator */}
+        {state === "success" && icpFitResult && (
+          <div className="animate-fade-in">
+            <FitIndicator
+              rating={icpFitResult.rating}
+              explanation={icpFitResult.explanation}
+            />
+          </div>
+        )}
+
         {/* Loading State */}
         {state === "loading" && <LoadingSteps />}
 
@@ -200,7 +269,11 @@ const Index = () => {
         {/* Success State */}
         {state === "success" && companyData && (
           <div id="results" className="space-y-8">
-            <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
+            <CompanyCard 
+              data={companyData} 
+              onReanalyze={handleReanalyze}
+              icpFitRating={icpFitResult?.rating}
+            />
             <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
           </div>
         )}
