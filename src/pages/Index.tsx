@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,7 +6,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
 import { ChatSection } from "@/components/ChatSection";
-import { IcpForm } from "@/components/IcpForm";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -46,160 +45,12 @@ interface CompanyData {
   analyzed_at: string;
 }
 
-interface IcpData {
-  industries: string[];
-  size: string;
-  regions: string[];
-  audience: string;
-  offering_keywords: string;
-  weights: {
-    industry: number;
-    size: number;
-    region: number;
-    audience: number;
-    offerings: number;
-  };
-}
-
-interface IcpFit {
-  score: number;
-  status: string;
-  rationale: string;
-  subscores?: Record<string, number>;
-}
-
 const Index = () => {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<AppState>("idle");
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [icp, setIcp] = useState<IcpData>({
-    industries: [],
-    size: "",
-    regions: [],
-    audience: "",
-    offering_keywords: "",
-    weights: { industry: 3, size: 2, region: 2, audience: 2, offerings: 2 }
-  });
-  const [icpFit, setIcpFit] = useState<IcpFit>({ score: 0, status: "", rationale: "" });
-  const [isSavingIcp, setIsSavingIcp] = useState(false);
   const { toast } = useToast();
-
-  // Load ICP from DB on mount
-  useEffect(() => {
-    loadIcp();
-  }, []);
-
-  const loadIcp = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('user_icp')
-        .select('*')
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (error) throw error;
-      if (data?.icp_json) {
-        const icpData = data.icp_json as any;
-        if (icpData && typeof icpData === 'object') {
-          setIcp({
-            industries: icpData.industries || [],
-            size: icpData.size || "",
-            regions: icpData.regions || [],
-            audience: icpData.audience || "",
-            offering_keywords: icpData.offering_keywords || "",
-            weights: icpData.weights || { industry: 3, size: 2, region: 2, audience: 2, offerings: 2 }
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Error loading ICP:', error);
-    }
-  };
-
-  const saveIcp = async () => {
-    setIsSavingIcp(true);
-    try {
-      // First check if record exists
-      const { data: existing } = await supabase
-        .from('user_icp')
-        .select('id')
-        .eq('owner_id', 'default')
-        .maybeSingle();
-
-      const record = {
-        owner_id: 'default',
-        icp_json: icp as any,
-        updated_at: new Date().toISOString()
-      };
-
-      let error;
-      if (existing) {
-        ({ error } = await supabase
-          .from('user_icp')
-          .update(record)
-          .eq('id', existing.id));
-      } else {
-        ({ error } = await supabase
-          .from('user_icp')
-          .insert([record]));
-      }
-
-      if (error) throw error;
-
-      toast({
-        title: "ICP Saved",
-        description: "Your Ideal Customer Profile has been saved.",
-      });
-
-      // Recalculate fit if company is loaded
-      if (companyData?.url) {
-        await computeFit(companyData.url);
-      }
-    } catch (error) {
-      console.error('Error saving ICP:', error);
-      toast({
-        title: "Save Failed",
-        description: "Failed to save ICP. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSavingIcp(false);
-    }
-  };
-
-  const resetIcp = () => {
-    setIcp({
-      industries: [],
-      size: "",
-      regions: [],
-      audience: "",
-      offering_keywords: "",
-      weights: { industry: 3, size: 2, region: 2, audience: 2, offerings: 2 }
-    });
-    setIcpFit({ score: 0, status: "", rationale: "" });
-  };
-
-  const computeFit = async (targetUrl: string) => {
-    try {
-      const { data, error } = await supabase.functions.invoke('compute-icp-fit', {
-        body: { url: targetUrl, icp }
-      });
-
-      if (error) throw error;
-
-      if (data.ok) {
-        setIcpFit(data.data);
-      } else {
-        console.error('Fit computation failed:', data.error);
-        setIcpFit({ score: 0, status: "Unknown", rationale: "Unable to compute fit." });
-      }
-    } catch (error) {
-      console.error('Error computing fit:', error);
-      setIcpFit({ score: 0, status: "Unknown", rationale: "Error computing fit." });
-    }
-  };
 
   const handleAnalyze = async () => {
     if (!url.trim()) {
@@ -236,17 +87,13 @@ const Index = () => {
         return;
       }
 
-      const compData = data.data as CompanyData;
-      setCompanyData(compData);
+      setCompanyData(data.data as CompanyData);
       setState("success");
       
       toast({
         title: "Analysis Complete",
         description: "Company data has been successfully analyzed.",
       });
-
-      // Compute ICP fit
-      await computeFit(compData.url);
       
       setTimeout(() => {
         document.getElementById("results")?.scrollIntoView({ behavior: "smooth" });
@@ -307,7 +154,7 @@ const Index = () => {
         </header>
 
         {/* URL Input Section */}
-        <div className="max-w-2xl mx-auto mb-8 animate-slide-up">
+        <div className="max-w-2xl mx-auto mb-12 animate-slide-up">
           <div className="flex gap-4">
             <Input
               type="url"
@@ -328,17 +175,6 @@ const Index = () => {
               Analyze
             </Button>
           </div>
-        </div>
-
-        {/* ICP Section */}
-        <div className="mb-12 animate-slide-up">
-          <IcpForm 
-            icp={icp} 
-            onUpdate={setIcp} 
-            onSave={saveIcp}
-            onReset={resetIcp}
-            isSaving={isSavingIcp}
-          />
         </div>
 
         {/* Loading State */}
@@ -364,11 +200,7 @@ const Index = () => {
         {/* Success State */}
         {state === "success" && companyData && (
           <div id="results" className="space-y-8">
-            <CompanyCard 
-              data={companyData} 
-              onReanalyze={handleReanalyze}
-              icpFit={icpFit.status ? icpFit : undefined}
-            />
+            <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
             <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
           </div>
         )}

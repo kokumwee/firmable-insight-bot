@@ -4,7 +4,6 @@ import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator";
 import { ConfidenceBadge, ConfidenceLevel } from "./ConfidenceBadge";
 import { EvidencePopover } from "./EvidencePopover";
-import { FitBadge } from "./FitBadge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
@@ -60,20 +59,12 @@ interface CompanyData {
   analyzed_at: string;
 }
 
-interface IcpFit {
-  score: number;
-  status: string;
-  rationale: string;
-  subscores?: Record<string, number>;
-}
-
 interface CompanyCardProps {
   data: CompanyData;
   onReanalyze: () => void;
-  icpFit?: IcpFit;
 }
 
-export const CompanyCard = ({ data, onReanalyze, icpFit }: CompanyCardProps) => {
+export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
   const { toast } = useToast();
   const [modalOpen, setModalOpen] = useState(false);
   const [suggestionData, setSuggestionData] = useState<any>(null);
@@ -157,27 +148,17 @@ export const CompanyCard = ({ data, onReanalyze, icpFit }: CompanyCardProps) => 
   return (
     <Card className="w-full max-w-4xl mx-auto shadow-card hover:shadow-card-hover transition-shadow animate-slide-up">
       <CardHeader className="space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-2">
-            <h2 className="text-3xl font-bold text-foreground">{data.name}</h2>
-            <a
-              href={data.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-primary hover:underline"
-            >
-              {data.url}
-              <ExternalLink className="h-4 w-4" />
-            </a>
-          </div>
-          {icpFit && icpFit.status && (
-            <FitBadge 
-              score={icpFit.score} 
-              status={icpFit.status} 
-              rationale={icpFit.rationale}
-              subscores={icpFit.subscores}
-            />
-          )}
+        <div className="space-y-2">
+          <h2 className="text-3xl font-bold text-foreground">{data.name}</h2>
+          <a
+            href={data.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+          >
+            {data.url}
+            <ExternalLink className="h-4 w-4" />
+          </a>
         </div>
       </CardHeader>
 
