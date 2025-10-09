@@ -2,10 +2,11 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Copy, TrendingUp, MessageSquare, Lightbulb } from "lucide-react";
+import { Copy, TrendingUp, MessageSquare, Lightbulb, Sparkles, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 
 interface Keyword {
   term: string;
@@ -37,6 +38,10 @@ interface EngagementInsightsProps {
 export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<EngagementData | null>(null);
+  const [assistantState, setAssistantState] = useState<'idle' | 'active' | 'result'>('idle');
+  const [userContext, setUserContext] = useState('');
+  const [generatedMessage, setGeneratedMessage] = useState('');
+  const [generating, setGenerating] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -75,6 +80,50 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
       title: "Copied!",
       description: `${label} copied to clipboard`,
     });
+  };
+
+  const generateMessage = async (regenerate = false) => {
+    if (!userContext.trim() && !regenerate) {
+      toast({
+        title: "Input required",
+        description: "Please describe your outreach goal",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setGenerating(true);
+    try {
+      const { data: response, error } = await supabase.functions.invoke('generate-outreach-message', {
+        body: { 
+          url, 
+          userContext: regenerate ? userContext : userContext.trim(),
+          regenerate 
+        }
+      });
+
+      if (error) throw error;
+
+      if (!response.ok) {
+        throw new Error(response.error?.message || "Failed to generate message");
+      }
+
+      setGeneratedMessage(response.message);
+      setAssistantState('result');
+      toast({
+        title: "Message generated!",
+        description: "Your personalized outreach message is ready",
+      });
+    } catch (error) {
+      console.error('Error generating message:', error);
+      toast({
+        title: "Generation failed",
+        description: error instanceof Error ? error.message : "Failed to generate outreach message",
+        variant: "destructive",
+      });
+    } finally {
+      setGenerating(false);
+    }
   };
 
   if (loading) {
@@ -249,6 +298,117 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
               </Button>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* AI Outreach Assistant */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5" />
+            AI Outreach Assistant
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {assistantState === 'idle' && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Would you like me to create a message to someone at this company?
+                Tell me a bit about yourself, your goal, who you're reaching out to, and the platform (e.g., email, LinkedIn).
+                I'll use the company's brand tone and language style to help you craft a perfect outreach message.
+              </p>
+              <Button onClick={() => setAssistantState('active')} className="w-full">
+                Start Message Builder
+              </Button>
+            </div>
+          )}
+
+          {assistantState === 'active' && (
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium text-muted-foreground mb-2 block">
+                  Describe your outreach goal…
+                </label>
+                <Textarea
+                  value={userContext}
+                  onChange={(e) => setUserContext(e.target.value)}
+                  placeholder="I'm a SaaS founder reaching out to a payments lead at Stripe to explore partnership opportunities via LinkedIn."
+                  rows={4}
+                  className="resize-none"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => generateMessage(false)} 
+                  disabled={generating || !userContext.trim()}
+                  className="flex-1"
+                >
+                  {generating ? "Generating..." : "Generate Message"}
+                </Button>
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    setAssistantState('idle');
+                    setUserContext('');
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {assistantState === 'result' && (
+            <div className="space-y-4">
+              <div className="bg-muted p-4 rounded-lg border-2 border-primary/20">
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <p className="text-sm font-semibold">Your Outreach Message</p>
+                </div>
+                <p className="text-sm whitespace-pre-wrap leading-relaxed mb-3">
+                  {generatedMessage}
+                </p>
+                <p className="text-xs text-muted-foreground italic">
+                  Based on the company's brand tone and your input.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => copyToClipboard(generatedMessage, "Outreach message")}
+                  className="flex-1"
+                >
+                  <Copy className="h-4 w-4 mr-2" />
+                  Copy Message
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => generateMessage(true)}
+                  disabled={generating}
+                  className="flex-1"
+                >
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Regenerate
+                </Button>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setAssistantState('active');
+                  setGeneratedMessage('');
+                }}
+                className="w-full"
+              >
+                Create New Message
+              </Button>
+              <p className="text-xs text-muted-foreground text-center italic">
+                💡 Tip: You can adjust the message tone — try "more casual" or "more formal" in your description next time.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
