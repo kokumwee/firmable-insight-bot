@@ -14,6 +14,3 @@ verify_jwt = false
 
 [functions.generate-outreach-message]
 verify_jwt = false
-
-[functions.suggest-market-neighbors]
-verify_jwt = false

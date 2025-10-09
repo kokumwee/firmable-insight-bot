@@ -160,24 +160,6 @@ export type Database = {
         }
         Relationships: []
       }
-      market_neighbors: {
-        Row: {
-          created_at: string | null
-          neighbors: Json
-          url: string
-        }
-        Insert: {
-          created_at?: string | null
-          neighbors?: Json
-          url: string
-        }
-        Update: {
-          created_at?: string | null
-          neighbors?: Json
-          url?: string
-        }
-        Relationships: []
-      }
       pages: {
         Row: {
           blocked: boolean | null
@@ -190,7 +172,6 @@ export type Database = {
           origin: string
           page_type: string
           path: string
-          reason: string | null
           status_code: number | null
           url: string
         }
@@ -205,7 +186,6 @@ export type Database = {
           origin: string
           page_type: string
           path: string
-          reason?: string | null
           status_code?: number | null
           url: string
         }
@@ -220,7 +200,6 @@ export type Database = {
           origin?: string
           page_type?: string
           path?: string
-          reason?: string | null
           status_code?: number | null
           url?: string
         }

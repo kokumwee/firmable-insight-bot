@@ -7,7 +7,6 @@ import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
 import { ChatSection } from "@/components/ChatSection";
 import { EngagementInsights } from "@/components/EngagementInsights";
-import { MarketNeighbors } from "@/components/MarketNeighbors";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -56,10 +55,8 @@ const Index = () => {
   const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
   const { toast } = useToast();
 
-  const handleAnalyze = async (urlToAnalyze?: string) => {
-    const targetUrl = urlToAnalyze || url.trim();
-    
-    if (!targetUrl) {
+  const handleAnalyze = async () => {
+    if (!url.trim()) {
       toast({
         title: "Invalid URL",
         description: "Please enter a valid website URL.",
@@ -89,7 +86,7 @@ const Index = () => {
       }, 1000);
 
       const { data, error } = await supabase.functions.invoke('analyze', {
-        body: { url: targetUrl }
+        body: { url: url.trim() }
       });
 
       clearInterval(progressInterval);
@@ -103,11 +100,6 @@ const Index = () => {
         const errorMsg = data.error?.message || "We couldn't analyze this site. Please try another URL.";
         setErrorMessage(errorMsg);
         
-        // For neighbor analyze failures, throw error to be caught by neighbor component
-        if (urlToAnalyze && data.error?.code === 'EMPTY_SITE') {
-          throw new Error(errorMsg);
-        }
-        
         toast({
           title: "Analysis Failed",
           description: errorMsg,
@@ -118,7 +110,6 @@ const Index = () => {
 
       setCompanyData(data.data as CompanyData);
       setState("success");
-      setUrl(targetUrl); // Update URL input if analyzing a neighbor
       
       toast({
         title: "Analysis Complete",
@@ -133,11 +124,6 @@ const Index = () => {
       setState("error");
       const errorMsg = error instanceof Error ? error.message : "We couldn't analyze this site. Please try another URL.";
       setErrorMessage(errorMsg);
-      
-      // Re-throw for neighbor analysis to handle
-      if (urlToAnalyze) {
-        throw error;
-      }
       
       toast({
         title: "Analysis Failed",
@@ -201,7 +187,7 @@ const Index = () => {
               className="flex-1 text-base"
             />
             <Button
-              onClick={() => handleAnalyze()}
+              onClick={handleAnalyze}
               disabled={state === "loading"}
               size="lg"
               className="px-8"
@@ -221,7 +207,7 @@ const Index = () => {
             <AlertDescription>
               <div className="flex items-center justify-between mb-2">
                 <span>{errorMessage}</span>
-                <Button variant="outline" size="sm" onClick={() => handleAnalyze()}>
+                <Button variant="outline" size="sm" onClick={handleAnalyze}>
                   Retry
                 </Button>
               </div>
@@ -236,24 +222,17 @@ const Index = () => {
         {state === "success" && companyData && (
           <div id="results" className="space-y-8">
             <Tabs defaultValue="company" className="w-full max-w-4xl mx-auto">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="company">Company Insights</TabsTrigger>
                 <TabsTrigger value="engagement">Engagement Insights</TabsTrigger>
-                <TabsTrigger value="neighbors">Market Neighbors</TabsTrigger>
               </TabsList>
               <TabsContent value="company" className="space-y-8">
                 <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
               </TabsContent>
-                <TabsContent value="engagement">
-                  <EngagementInsights url={companyData.url} />
-                </TabsContent>
-                <TabsContent value="neighbors">
-                  <MarketNeighbors 
-                    url={companyData.url} 
-                    onAnalyzeNeighbor={handleAnalyze}
-                  />
-                </TabsContent>
-              </Tabs>
+              <TabsContent value="engagement">
+                <EngagementInsights url={companyData.url} />
+              </TabsContent>
+            </Tabs>
             <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
           </div>
         )}

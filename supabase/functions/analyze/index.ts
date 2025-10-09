@@ -254,63 +254,43 @@ function scoreLink(anchorText: string, pathname: string): number {
 }
 
 async function robustFetch(url: string) {
-  try {
-    let res = await fetch(url, {
+  let res = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-AU,en;q=0.9",
+      "Cache-Control": "no-cache",
+    }
+  });
+
+  if (!res.ok || res.status >= 400) {
+    res = await fetch(url, {
       method: "GET",
       redirect: "follow",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-AU,en;q=0.9",
-        "Cache-Control": "no-cache",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       }
     });
+  }
 
-    if (!res.ok || res.status >= 400) {
-      res = await fetch(url, {
-        method: "GET",
-        redirect: "follow",
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-      });
-    }
+  const body = await res.text();
+  const looksBlocked = !res.ok || res.status >= 400 || body.length < 2500 ||
+    /access\s*denied|enable\s*javascript|cloudflare/i.test(body);
 
-    const body = await res.text();
-    const status = res.status;
-    
-    // Determine error code based on status
-    let code = "BLOCKED_OR_EMPTY";
-    if (status >= 500) code = "HTTP_5XX";
-    else if (status >= 400) code = "HTTP_4XX";
-    else if (body.length < 2500 || /access\s*denied|enable\s*javascript|cloudflare/i.test(body)) {
-      code = "EMPTY_CONTENT";
-    }
-
-    const looksBlocked = !res.ok || status >= 400 || body.length < 2500 ||
-      /access\s*denied|enable\s*javascript|cloudflare/i.test(body);
-
-    if (looksBlocked) {
-      return {
-        ok: false,
-        code,
-        message: status >= 400 ? `HTTP ${status}` : "Site blocked or requires JavaScript",
-        status,
-      };
-    }
-
-    return { ok: true, html: body, finalUrl: res.url, status };
-  } catch (err) {
+  if (looksBlocked) {
     return {
       ok: false,
-      code: "BLOCKED_OR_EMPTY",
-      message: "Network error or timeout",
-      status: 0,
+      code: res.status >= 400 ? `HTTP_${res.status}` : "BLOCKED_OR_EMPTY",
+      message: "Site blocked or requires JavaScript",
     };
   }
+
+  return { ok: true, html: body, finalUrl: res.url };
 }
 
 // Main crawl function
@@ -343,7 +323,6 @@ async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; ch
   const chunks: any[] = [];
   let chunkIndex = 0;
   let truncated = false;
-  let skippedCount = 0;
 
   console.log(`Crawling ${urlList.length} pages...`);
 
@@ -371,18 +350,15 @@ async function crawlSite(url: string, supabase: any): Promise<{ pages: any[]; ch
       const fetchResult = await robustFetch(pageUrl);
       
       if (!fetchResult.ok) {
-        // Store as blocked with reason
-        console.log(`Skipping ${pageUrl} - ${fetchResult.code}`);
-        skippedCount++;
+        // Store as blocked
         await supabase.from('pages').upsert({
           url: pageUrl,
           origin: baseUrl.origin,
           path: pageUrlObj.pathname,
           page_type: pageType,
-          status_code: fetchResult.status || 0,
+          status_code: 0,
           blocked: true,
-          content_len: 0,
-          reason: fetchResult.code
+          content_len: 0
         });
         continue;
       }
@@ -562,23 +538,6 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Check if homepage is readable first
-    console.log('Stage: Checking homepage...');
-    const homepageCheck = await robustFetch(normalizedUrl);
-    if (!homepageCheck.ok) {
-      console.log('Homepage unreadable:', homepageCheck.code);
-      return new Response(JSON.stringify({
-        ok: false,
-        error: {
-          code: 'EMPTY_SITE',
-          message: "We couldn't find readable pages on this site."
-        }
-      }), {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
     // Stage 1: Crawl site
     console.log('Stage: Crawling site...');
     const { pages, chunks, truncated } = await crawlSite(normalizedUrl, supabase);
@@ -596,14 +555,7 @@ serve(async (req) => {
       });
     }
 
-    // Count skipped pages
-    const { count: skippedCount } = await supabase
-      .from('pages')
-      .select('*', { count: 'exact', head: true })
-      .eq('url', normalizedUrl)
-      .eq('blocked', true);
-
-    console.log(`Crawled ${pages.length} pages, skipped ${skippedCount || 0}, created ${chunks.length} chunks`);
+    console.log(`Crawled ${pages.length} pages, created ${chunks.length} chunks`);
 
     // Stage 2: Select best chunks
     const selectedChunks = selectBestChunks(chunks, MAX_CHUNKS_FOR_LLM);
@@ -818,21 +770,11 @@ serve(async (req) => {
     }
 
     console.log('Analysis complete');
-    
-    // Get final skipped count
-    const { count: finalSkippedCount } = await supabase
-      .from('pages')
-      .select('*', { count: 'exact', head: true })
-      .eq('url', normalizedUrl)
-      .eq('blocked', true);
-    
     return new Response(JSON.stringify({
       ok: true,
       data: companyCard,
       crawl: {
-        total_pages: pages.length + (finalSkippedCount || 0),
-        processed: pages.length,
-        skipped: finalSkippedCount || 0,
+        total_pages: pages.length,
         total_chunks: chunks.length,
         truncated
       }
