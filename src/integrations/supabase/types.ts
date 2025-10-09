@@ -101,6 +101,7 @@ export type Database = {
           industry: Json | null
           name: string | null
           offerings: Json | null
+          resolvers: Json | null
           target_audience: Json | null
           url: string
           usp: Json | null
@@ -114,6 +115,7 @@ export type Database = {
           industry?: Json | null
           name?: string | null
           offerings?: Json | null
+          resolvers?: Json | null
           target_audience?: Json | null
           url: string
           usp?: Json | null
@@ -127,9 +129,34 @@ export type Database = {
           industry?: Json | null
           name?: string | null
           offerings?: Json | null
+          resolvers?: Json | null
           target_audience?: Json | null
           url?: string
           usp?: Json | null
+        }
+        Relationships: []
+      }
+      engagement_insights: {
+        Row: {
+          brand_voice: Json | null
+          created_at: string | null
+          key_messages: Json | null
+          outreach_guidance: Json | null
+          url: string
+        }
+        Insert: {
+          brand_voice?: Json | null
+          created_at?: string | null
+          key_messages?: Json | null
+          outreach_guidance?: Json | null
+          url: string
+        }
+        Update: {
+          brand_voice?: Json | null
+          created_at?: string | null
+          key_messages?: Json | null
+          outreach_guidance?: Json | null
+          url?: string
         }
         Relationships: []
       }
@@ -140,6 +167,8 @@ export type Database = {
           content_len: number | null
           fetched_at: string | null
           id: string
+          jsonld: Json | null
+          meta: Json | null
           origin: string
           page_type: string
           path: string
@@ -152,6 +181,8 @@ export type Database = {
           content_len?: number | null
           fetched_at?: string | null
           id?: string
+          jsonld?: Json | null
+          meta?: Json | null
           origin: string
           page_type: string
           path: string
@@ -164,6 +195,8 @@ export type Database = {
           content_len?: number | null
           fetched_at?: string | null
           id?: string
+          jsonld?: Json | null
+          meta?: Json | null
           origin?: string
           page_type?: string
           path?: string
