@@ -49,6 +49,8 @@ export type Database = {
           chunk_id: string
           created_at: string | null
           id: string
+          page_type: string | null
+          path: string | null
           text: string
           text_offset: number
           url: string
@@ -57,6 +59,8 @@ export type Database = {
           chunk_id: string
           created_at?: string | null
           id?: string
+          page_type?: string | null
+          path?: string | null
           text: string
           text_offset: number
           url: string
@@ -65,6 +69,8 @@ export type Database = {
           chunk_id?: string
           created_at?: string | null
           id?: string
+          page_type?: string | null
+          path?: string | null
           text?: string
           text_offset?: number
           url?: string

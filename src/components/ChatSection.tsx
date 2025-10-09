@@ -7,6 +7,10 @@ import { useToast } from "@/hooks/use-toast";
 
 interface Evidence {
   snippet: string;
+  source?: string; // Legacy field
+  source_url?: string;
+  page_type?: string;
+  offset?: number;
 }
 
 interface ChatMessage {
@@ -108,12 +112,37 @@ export const ChatSection = ({ currentUrl, onAsk }: ChatSectionProps) => {
                 </div>
 
                 {msg.role === "assistant" && msg.citations && msg.citations.length > 0 && (
-                  <div className="ml-12 space-y-1">
+                  <div className="ml-12 space-y-2">
                     <p className="text-xs font-semibold text-muted-foreground">Citations:</p>
                     {msg.citations.map((citation, citIdx) => (
-                      <p key={citIdx} className="text-xs text-muted-foreground italic border-l-2 border-primary pl-2">
-                        "{citation.snippet}"
-                      </p>
+                      <div key={citIdx} className="space-y-1">
+                        <p className="text-xs text-muted-foreground italic border-l-2 border-primary pl-2">
+                          "{citation.snippet}"
+                        </p>
+                        {(citation.source_url || citation.page_type) && (
+                          <div className="ml-2 flex items-center gap-2 text-xs text-muted-foreground/70">
+                            {citation.source_url && (
+                              <a
+                                href={citation.source_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="hover:text-primary transition-colors flex items-center gap-1"
+                              >
+                                <span>{new URL(citation.source_url).pathname}</span>
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                </svg>
+                              </a>
+                            )}
+                            {citation.page_type && (
+                              <>
+                                <span>•</span>
+                                <span className="capitalize">{citation.page_type}</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 )}

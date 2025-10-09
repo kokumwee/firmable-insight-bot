@@ -26,6 +26,37 @@ async function tryRenderedFallback(_url: string): Promise<{ ok: boolean; html?: 
   return { ok: false };
 }
 
+function canonicalSameOrigin(base: URL, href: string): URL | null {
+  try {
+    const u = new URL(href, base);
+    if (u.origin !== base.origin) return null;
+    if (u.pathname === "/" && u.hash) return null; // ignore pure hash links
+    return u;
+  } catch { return null; }
+}
+
+function classifyPath(pathname: string): string {
+  const p = pathname.toLowerCase();
+  if (p === "/" || p === "") return "homepage";
+  if (/about|about-us|who-we-are|company/.test(p)) return "about";
+  if (/team|leadership|founders|board/.test(p)) return "team";
+  if (/contact|get-in-touch|support/.test(p)) return "contact";
+  if (/pricing|plans/.test(p)) return "pricing";
+  if (/press|news|media|investors/.test(p)) return "press";
+  return "other";
+}
+
+function scoreLink(anchorText: string, pathname: string): number {
+  const t = (anchorText || "").toLowerCase();
+  const p = (pathname || "").toLowerCase();
+  let s = 0;
+  if (/about|about-us|company|who-we-are|team|leadership|contact|pricing|press|media|investors/.test(t+p)) s += 5;
+  if ((p.match(/\//g) || []).length <= 2) s += 2;
+  if (/login|cart|checkout|privacy|terms/.test(p)) s -= 5;
+  if (/\.(pdf|docx?|zip|jpg|jpeg|png|svg|mp4|webm)(\?|$)/i.test(p)) s -= 999;
+  return s;
+}
+
 async function robustFetch(url: string) {
   let res = await fetch(url, {
     method: "GET",
@@ -199,25 +230,117 @@ serve(async (req) => {
 
     const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-    console.log('Extracting...');
-    // Create chunks (700-800 chars each)
-    const chunks: Array<{ chunk_id: string; text: string; offset: number }> = [];
-    const chunkSize = 750;
-    let offset = 0;
-    let chunkIndex = 0;
+    // Crawl additional pages
+    console.log('Crawling additional pages...');
+    const CRAWL_ENABLED = Deno.env.get('CRAWL_ENABLED') !== 'false';
+    const CRAWL_MAX_PAGES = parseInt(Deno.env.get('CRAWL_MAX_PAGES') || '3');
+    const baseUrl = new URL(fetchResult.finalUrl);
+    
+    interface PageData {
+      url: string;
+      path: string;
+      page_type: string;
+      text: string;
+    }
+    
+    const allPages: PageData[] = [{
+      url: baseUrl.toString(),
+      path: baseUrl.pathname,
+      page_type: classifyPath(baseUrl.pathname),
+      text: textContent
+    }];
 
-    while (offset < textContent.length) {
-      const chunkText = textContent.slice(offset, offset + chunkSize);
-      chunks.push({
-        chunk_id: `c${chunkIndex + 1}`,
-        text: chunkText,
-        offset
-      });
-      offset += chunkSize;
-      chunkIndex++;
+    if (CRAWL_ENABLED && CRAWL_MAX_PAGES > 0) {
+      const startTime = Date.now();
+      const MAX_CRAWL_TIME = 8000; // 8 seconds max
+
+      // Parse anchors from homepage
+      const anchorRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
+      const candidates: Array<{ url: URL; text: string; score: number }> = [];
+      
+      let match;
+      while ((match = anchorRegex.exec(cleanedHtml)) !== null) {
+        const href = match[1];
+        const anchorText = match[2];
+        const candidateUrl = canonicalSameOrigin(baseUrl, href);
+        
+        if (candidateUrl && candidateUrl.pathname !== baseUrl.pathname) {
+          const score = scoreLink(anchorText, candidateUrl.pathname);
+          if (score > -5) {
+            candidates.push({ url: candidateUrl, text: anchorText, score });
+          }
+        }
+      }
+
+      // Sort by score and deduplicate by pathname
+      candidates.sort((a, b) => b.score - a.score);
+      const seenPaths = new Set([baseUrl.pathname]);
+      const topCandidates = candidates.filter(c => {
+        if (seenPaths.has(c.url.pathname)) return false;
+        seenPaths.add(c.url.pathname);
+        return true;
+      }).slice(0, CRAWL_MAX_PAGES);
+
+      console.log(`Found ${topCandidates.length} pages to crawl`);
+
+      // Crawl each page with throttling
+      for (const candidate of topCandidates) {
+        if (Date.now() - startTime > MAX_CRAWL_TIME) {
+          console.log('Crawl time limit reached');
+          break;
+        }
+
+        try {
+          // Throttle: wait 600ms between requests
+          await new Promise(resolve => setTimeout(resolve, 600));
+          
+          const crawlResult = await robustFetch(candidate.url.toString());
+          
+          if (crawlResult.ok && !isLikelyEmptyHomepage(crawlResult.html!)) {
+            let crawlCleanedHtml = crawlResult.html!.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+            crawlCleanedHtml = crawlCleanedHtml.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+            crawlCleanedHtml = crawlCleanedHtml.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
+            const crawlText = crawlCleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            
+            allPages.push({
+              url: candidate.url.toString(),
+              path: candidate.url.pathname,
+              page_type: classifyPath(candidate.url.pathname),
+              text: crawlText
+            });
+            
+            console.log(`Crawled ${candidate.url.pathname} (${classifyPath(candidate.url.pathname)})`);
+          }
+        } catch (err) {
+          console.error(`Failed to crawl ${candidate.url.pathname}:`, err);
+          // Continue with other pages
+        }
+      }
     }
 
-    console.log(`Created ${chunks.length} chunks`);
+    console.log('Extracting...');
+    // Create chunks from all pages (700-800 chars each)
+    const chunks: Array<{ chunk_id: string; text: string; offset: number; source_url: string; page_type: string }> = [];
+    const chunkSize = 750;
+    let chunkIndex = 0;
+
+    for (const page of allPages) {
+      let offset = 0;
+      while (offset < page.text.length) {
+        const chunkText = page.text.slice(offset, offset + chunkSize);
+        chunks.push({
+          chunk_id: `c${chunkIndex + 1}`,
+          text: chunkText,
+          offset,
+          source_url: page.url,
+          page_type: page.page_type
+        });
+        offset += chunkSize;
+        chunkIndex++;
+      }
+    }
+
+    console.log(`Created ${chunks.length} chunks from ${allPages.length} pages`);
 
     // Extract contacts
     const emails = new Set<string>();
@@ -276,11 +399,11 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: 'You extract company info ONLY from provided homepage text chunks. If uncertain, set value=null and confidence="low". For each non-null value add 1-2 evidence snippets (≤180 chars) and offsets when available. Return ONLY valid JSON, no commentary.'
+            content: 'You extract company info from provided text chunks that may come from the homepage and other key pages (about/company/team/contact/pricing/press). Prefer facts from about/company pages for company size, HQ, and leadership. If uncertain, set value=null and confidence="low". For each non-null value add 1-2 evidence snippets (≤180 chars) with source_url and page_type. Return ONLY valid JSON, no commentary.'
           },
           {
             role: 'user',
-            content: `URL: ${normalizedUrl}\n\nExtracted title/h1: ${extractedName}\n\nChunks:\n${JSON.stringify(chunks.slice(0, 12))}\n\nExtract and return JSON with this exact schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words, productized, sentence-case, deduplicated)","details":"1-2 sentence description (≤180 chars)","source":"homepage","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}\n\nFor offerings_raw: return 5-10 short, productized phrases (≤12 words each), sentence-case, no brand repetition. Each with a brief 1-2 sentence description.\nFor target_audience_raw: return a list of short bullets (≤12 words each), each representing a distinct audience segment.`
+            content: `URL: ${normalizedUrl}\n\nExtracted title/h1: ${extractedName}\n\nChunks (from multiple pages):\n${JSON.stringify(chunks.slice(0, 12).map(c => ({ chunk_id: c.chunk_id, text: c.text, offset: c.offset, source_url: c.source_url, page_type: c.page_type })))}\n\nExtract and return JSON with this exact schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words, productized, sentence-case, deduplicated)","details":"1-2 sentence description (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}\n\nFor offerings_raw: return 5-10 short, productized phrases (≤12 words each), sentence-case, no brand repetition. Each with a brief 1-2 sentence description and source information.\nFor target_audience_raw: return a list of short bullets (≤12 words each), each representing a distinct audience segment.\nWhen producing evidence, include the exact snippet, source_url (absolute URL), page_type, and offset from the chunks provided.`
           }
         ],
         temperature: 0.3
@@ -323,7 +446,7 @@ serve(async (req) => {
             },
             {
               role: 'user',
-              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching this schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source":"homepage","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source":"homepage","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}`
+              content: `Previous response: ${aiData.choices[0].message.content}\n\nReturn ONLY valid JSON matching this schema:\n{\n  "name": "string or null",\n  "industry": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "company_size": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "hq_location": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "usp": {"value":"string or null","confidence":"high|medium|low","evidence":[{"snippet":"string","source_url":"string","page_type":"string","offset":number}]},\n  "offerings_raw": [{"snippet":"string (≤12 words)","details":"1-2 sentence (≤180 chars)","source_url":"string","page_type":"string","offset":number}],\n  "target_audience_raw": ["Short audience bullet 1 (≤12 words)","Short audience bullet 2 (≤12 words)"]\n}`
             }
           ],
           temperature: 0.1
@@ -346,7 +469,12 @@ serve(async (req) => {
       return {
         bullet,
         details: compressDetails(rawItem.details || bullet, 180),
-        evidence: rawItem.evidence || (rawItem.snippet ? [{ snippet: rawItem.snippet, source: "homepage", offset: rawItem.offset || 0 }] : [])
+        evidence: rawItem.evidence || (rawItem.snippet ? [{ 
+          snippet: rawItem.snippet, 
+          source_url: rawItem.source_url || normalizedUrl, 
+          page_type: rawItem.page_type || "homepage",
+          offset: rawItem.offset || 0 
+        }] : [])
       };
     });
 
@@ -393,7 +521,9 @@ serve(async (req) => {
       url: normalizedUrl,
       chunk_id: chunk.chunk_id,
       text: chunk.text,
-      text_offset: chunk.offset
+      text_offset: chunk.offset,
+      path: new URL(chunk.source_url).pathname,
+      page_type: chunk.page_type
     }));
     
     const { error: chunksError } = await supabase.from('chunks').insert(chunksToInsert);
