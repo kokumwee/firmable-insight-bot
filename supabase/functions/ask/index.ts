@@ -7,57 +7,103 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+function normalizeUrl(input: string): string {
+  if (!input) return input;
+  let url = input.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    url = "https://" + url;
+  }
+  try {
+    const u = new URL(url);
+    u.host = u.host.toLowerCase();
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { url, query } = await req.json();
+    let { url, query } = await req.json();
     
     if (!url || !query) {
-      throw new Error('URL and query are required');
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        error: { code: 'MISSING_PARAMS', message: 'URL and query are required' }
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    const normalizedUrl = url.trim().toLowerCase();
-    console.log('Processing question for URL:', normalizedUrl);
+    url = normalizeUrl(url);
     console.log('Question:', query);
+    console.log('Processing question for URL:', url);
 
-    // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Load chunks for this URL
-    const { data: chunks, error: chunksError } = await supabase
+    let { data: chunks, error: chunksError } = await supabase
       .from('chunks')
       .select('*')
-      .eq('url', normalizedUrl)
+      .eq('url', url)
       .order('text_offset');
 
     if (chunksError) {
-      console.error('Error loading chunks:', chunksError);
       throw chunksError;
     }
 
     if (!chunks || chunks.length === 0) {
-      console.log('No chunks found, need to analyze first');
-      return new Response(
-        JSON.stringify({ 
-          error: 'No analysis found for this URL. Please analyze it first.' 
-        }), 
-        {
-          status: 404,
+      console.log('No chunks found, analyzing URL first...');
+      const analyzeResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/analyze`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`
+        },
+        body: JSON.stringify({ url })
+      });
+
+      const analyzeResult = await analyzeResponse.json();
+      
+      if (!analyzeResult.ok) {
+        return new Response(JSON.stringify({ 
+          ok: false, 
+          error: analyzeResult.error
+        }), {
+          status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
+        });
+      }
+
+      const { data: newChunks, error: newChunksError } = await supabase
+        .from('chunks')
+        .select('*')
+        .eq('url', url)
+        .order('text_offset');
+
+      if (newChunksError || !newChunks || newChunks.length === 0) {
+        return new Response(JSON.stringify({ 
+          ok: false, 
+          error: { code: 'NO_CHUNKS', message: 'Failed to analyze URL' }
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      chunks = newChunks;
     }
 
-    // Load company card
     const { data: companyCard, error: cardError } = await supabase
       .from('company_cards')
       .select('*')
-      .eq('url', normalizedUrl)
+      .eq('url', url)
       .single();
 
     if (cardError && cardError.code !== 'PGRST116') {
@@ -104,7 +150,7 @@ serve(async (req) => {
           },
           {
             role: 'user',
-            content: `URL: ${normalizedUrl}\n\nCompany Card:\n${JSON.stringify(companyCard || {})}\n\nRelevant Chunks:\n${JSON.stringify(topChunks)}\n\nQuestion: ${query}\n\nProvide answer with citations.`
+            content: `URL: ${url}\n\nCompany Card:\n${JSON.stringify(companyCard || {})}\n\nRelevant Chunks:\n${JSON.stringify(topChunks)}\n\nQuestion: ${query}\n\nProvide answer with citations.`
           }
         ],
         temperature: 0.3
@@ -162,14 +208,14 @@ serve(async (req) => {
     // Log to chat_logs
     await supabase.from('chat_logs').insert([
       {
-        url: normalizedUrl,
+        url: url,
         role: 'user',
         text: query,
         citations: null,
         guardrail: null
       },
       {
-        url: normalizedUrl,
+        url: url,
         role: 'assistant',
         text: answerData.answer,
         citations: answerData.citations || [],
@@ -178,19 +224,30 @@ serve(async (req) => {
     ]);
 
     console.log('Q&A complete');
-    return new Response(JSON.stringify(answerData), {
+    return new Response(JSON.stringify({
+      ok: true,
+      data: {
+        answer: answerData.answer,
+        citations: answerData.citations || [],
+        guardrail: answerData.guardrail || 'on_homepage'
+      }
+    }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (error) {
     console.error('Error in ask function:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to answer question.';
+    const errorMessage = error instanceof Error ? error.message : 'Failed to process question';
     return new Response(
       JSON.stringify({ 
-        error: errorMessage
+        ok: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: errorMessage
+        }
       }), 
       {
-        status: 500,
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );

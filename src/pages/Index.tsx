@@ -74,11 +74,20 @@ const Index = () => {
         throw error;
       }
 
-      if (data.error) {
-        throw new Error(data.error);
+      if (!data.ok) {
+        setState("error");
+        const errorMsg = data.error?.message || "We couldn't analyze this site. Please try another URL.";
+        setErrorMessage(errorMsg);
+        
+        toast({
+          title: "Analysis Failed",
+          description: errorMsg,
+          variant: "destructive",
+        });
+        return;
       }
 
-      setCompanyData(data as CompanyData);
+      setCompanyData(data.data as CompanyData);
       setState("success");
       
       toast({
@@ -86,7 +95,6 @@ const Index = () => {
         description: "Company data has been successfully analyzed.",
       });
       
-      // Smooth scroll to results
       setTimeout(() => {
         document.getElementById("results")?.scrollIntoView({ behavior: "smooth" });
       }, 100);
@@ -117,14 +125,14 @@ const Index = () => {
       throw error;
     }
 
-    if (data.error) {
-      throw new Error(data.error);
+    if (!data.ok) {
+      throw new Error(data.error?.message || "Failed to process question");
     }
 
     return {
-      answer: data.answer,
-      citations: data.citations || [],
-      guardrail: data.guardrail || "on_homepage"
+      answer: data.data.answer,
+      citations: data.data.citations || [],
+      guardrail: data.data.guardrail || "on_homepage"
     };
   };
 
@@ -175,11 +183,16 @@ const Index = () => {
         {/* Error State */}
         {state === "error" && (
           <Alert variant="destructive" className="max-w-2xl mx-auto animate-fade-in">
-            <AlertDescription className="flex items-center justify-between">
-              <span>{errorMessage}</span>
-              <Button variant="outline" size="sm" onClick={handleAnalyze}>
-                Retry
-              </Button>
+            <AlertDescription>
+              <div className="flex items-center justify-between mb-2">
+                <span>{errorMessage}</span>
+                <Button variant="outline" size="sm" onClick={handleAnalyze}>
+                  Retry
+                </Button>
+              </div>
+              <p className="text-sm opacity-80 mt-2">
+                Tip: Some sites block automated reads. Try a different URL or a less JS-heavy page.
+              </p>
             </AlertDescription>
           </Alert>
         )}

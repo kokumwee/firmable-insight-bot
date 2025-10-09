@@ -7,6 +7,90 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+function normalizeUrl(input: string): string {
+  if (!input) return input;
+  let url = input.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    url = "https://" + url;
+  }
+  try {
+    const u = new URL(url);
+    u.host = u.host.toLowerCase();
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+async function tryRenderedFallback(_url: string): Promise<{ ok: boolean; html?: string; finalUrl?: string }> {
+  return { ok: false };
+}
+
+async function robustFetch(url: string) {
+  let res = await fetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "en-AU,en;q=0.9",
+      "Cache-Control": "no-cache",
+      "Pragma": "no-cache",
+      "Upgrade-Insecure-Requests": "1",
+      "Referer": "https://www.google.com/"
+    }
+  });
+
+  if (!res.ok || res.status >= 400) {
+    res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-AU,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": "https://www.google.com/"
+      }
+    });
+  }
+
+  let body = await res.text();
+  const finalUrl = res.url;
+
+  const looksBlocked =
+    !res.ok ||
+    res.status >= 400 ||
+    body.length < 2500 ||
+    /access\s*denied|enable\s*javascript|cloudflare|akamai|attention\s*required/i.test(body);
+
+  if (looksBlocked) {
+    const rendered = await tryRenderedFallback(finalUrl);
+    if (rendered?.ok && rendered.html && rendered.html.length > 2500) {
+      return { ok: true, html: rendered.html, finalUrl: rendered.finalUrl || finalUrl, source: "rendered" };
+    }
+    return {
+      ok: false,
+      code: res.status >= 400 ? `HTTP_${res.status}` : "BLOCKED_OR_EMPTY",
+      message: "This site appears to block automated reads or requires JavaScript rendering.",
+      snippet: body.slice(0, 1200),
+      finalUrl
+    };
+  }
+
+  return { ok: true, html: body, finalUrl, source: "direct" };
+}
+
+function isLikelyEmptyHomepage(html: string): boolean {
+  const text = html.replace(/<script[\s\S]*?<\/script>/gi, "")
+                   .replace(/<style[\s\S]*?<\/style>/gi, "")
+                   .replace(/<[^>]+>/g, " ")
+                   .replace(/\s+/g, " ")
+                   .trim();
+  return text.length < 1200;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -15,57 +99,67 @@ serve(async (req) => {
   try {
     const { url } = await req.json();
     
-    // Validate URL
     if (!url || typeof url !== 'string') {
-      throw new Error('Invalid URL provided');
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        error: { code: 'INVALID_URL', message: 'Invalid URL provided' }
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
     
-    const normalizedUrl = url.trim().toLowerCase();
-    if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
-      throw new Error('URL must start with http:// or https://');
-    }
-
+    const normalizedUrl = normalizeUrl(url);
     console.log('Analyzing URL:', normalizedUrl);
 
-    // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Fetch homepage HTML
     console.log('Fetching HTML...');
-    const fetchResponse = await fetch(normalizedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 FirmableDemo/1.0'
-      },
-      redirect: 'follow'
-    });
+    const fetchResult = await robustFetch(normalizedUrl);
 
-    if (!fetchResponse.ok) {
-      throw new Error(`Failed to fetch URL: ${fetchResponse.status} ${fetchResponse.statusText}`);
+    if (!fetchResult.ok) {
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        error: { 
+          code: fetchResult.code, 
+          message: fetchResult.message 
+        }
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    let html = await fetchResponse.text();
+    const html = fetchResult.html!;
     
-    // Clean HTML
-    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    html = html.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    html = html.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
-    html = html.replace(/\s+/g, ' ').trim();
+    if (isLikelyEmptyHomepage(html)) {
+      return new Response(JSON.stringify({ 
+        ok: false, 
+        error: { 
+          code: 'EMPTY_CONTENT', 
+          message: "We couldn't read this homepage (likely JS-only or blocked)." 
+        }
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
-    // Extract title and h1
-    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    const h1Match = html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+    console.log('Parsing...');
+    let cleanedHtml = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/\s+/g, ' ').trim();
+
+    const titleMatch = cleanedHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const h1Match = cleanedHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i);
     const extractedName = titleMatch?.[1] || h1Match?.[1] || null;
 
-    // Extract text content (strip all HTML tags)
-    const textContent = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    if (textContent.length < 100) {
-      throw new Error('Not enough content found on the page');
-    }
+    const textContent = cleanedHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-    console.log('Creating chunks...');
+    console.log('Extracting...');
     // Create chunks (700-800 chars each)
     const chunks: Array<{ chunk_id: string; text: string; offset: number }> = [];
     const chunkSize = 750;
@@ -96,7 +190,7 @@ serve(async (req) => {
     };
 
     // Extract emails
-    const mailtoMatches = html.matchAll(/mailto:([^\s"'<>]+)/gi);
+    const mailtoMatches = cleanedHtml.matchAll(/mailto:([^\s"'<>]+)/gi);
     for (const match of mailtoMatches) {
       emails.add(match[1].toLowerCase());
     }
@@ -106,7 +200,7 @@ serve(async (req) => {
     }
 
     // Extract phones
-    const telMatches = html.matchAll(/tel:([^\s"'<>]+)/gi);
+    const telMatches = cleanedHtml.matchAll(/tel:([^\s"'<>]+)/gi);
     for (const match of telMatches) {
       phones.add(match[1]);
     }
@@ -119,7 +213,7 @@ serve(async (req) => {
     }
 
     // Extract social links
-    const linkMatches = html.matchAll(/href=["']([^"']+)["']/gi);
+    const linkMatches = cleanedHtml.matchAll(/href=["']([^"']+)["']/gi);
     for (const match of linkMatches) {
       const href = match[1].toLowerCase();
       if (href.includes('linkedin.com')) socials.linkedin = match[1];
@@ -128,8 +222,7 @@ serve(async (req) => {
       else if (href.includes('instagram.com')) socials.instagram = match[1];
     }
 
-    // Call Lovable AI for extraction
-    console.log('Calling AI for extraction...');
+    console.log('Summarising...');
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -261,7 +354,7 @@ serve(async (req) => {
     }
 
     console.log('Analysis complete');
-    return new Response(JSON.stringify(companyCard), {
+    return new Response(JSON.stringify({ ok: true, data: companyCard }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
@@ -270,10 +363,14 @@ serve(async (req) => {
     const errorMessage = error instanceof Error ? error.message : 'Failed to analyze website. Please try another URL.';
     return new Response(
       JSON.stringify({ 
-        error: errorMessage
+        ok: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: errorMessage
+        }
       }), 
       {
-        status: 500,
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
     );
