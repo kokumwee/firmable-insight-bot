@@ -7,6 +7,7 @@ import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
 import { ChatSection } from "@/components/ChatSection";
 import { EngagementInsights } from "@/components/EngagementInsights";
+import { MarketNeighbors } from "@/components/MarketNeighbors";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -305,15 +306,19 @@ const Index = () => {
               </Button>
             </div>
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full max-w-4xl mx-auto">
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="insights">Company Insights</TabsTrigger>
                 <TabsTrigger value="engagement">Engagement Insights</TabsTrigger>
+                <TabsTrigger value="neighbors">Market Neighbors</TabsTrigger>
               </TabsList>
               <TabsContent value="insights" className="space-y-8">
                 <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
               </TabsContent>
               <TabsContent value="engagement">
                 <EngagementInsights url={companyData.url} />
+              </TabsContent>
+              <TabsContent value="neighbors">
+                <MarketNeighbors currentUrl={companyData.url} />
               </TabsContent>
             </Tabs>
             <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
