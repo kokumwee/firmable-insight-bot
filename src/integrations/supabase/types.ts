@@ -160,6 +160,48 @@ export type Database = {
         }
         Relationships: []
       }
+      market_neighbors: {
+        Row: {
+          created_at: string | null
+          neighbors: Json
+          url: string
+        }
+        Insert: {
+          created_at?: string | null
+          neighbors?: Json
+          url: string
+        }
+        Update: {
+          created_at?: string | null
+          neighbors?: Json
+          url?: string
+        }
+        Relationships: []
+      }
+      page_cache: {
+        Row: {
+          diagnostic: Json | null
+          fetched_at: string
+          html: string
+          status: number
+          url: string
+        }
+        Insert: {
+          diagnostic?: Json | null
+          fetched_at?: string
+          html: string
+          status: number
+          url: string
+        }
+        Update: {
+          diagnostic?: Json | null
+          fetched_at?: string
+          html?: string
+          status?: number
+          url?: string
+        }
+        Relationships: []
+      }
       pages: {
         Row: {
           blocked: boolean | null
@@ -172,6 +214,7 @@ export type Database = {
           origin: string
           page_type: string
           path: string
+          reason: string | null
           status_code: number | null
           url: string
         }
@@ -186,6 +229,7 @@ export type Database = {
           origin: string
           page_type: string
           path: string
+          reason?: string | null
           status_code?: number | null
           url: string
         }
@@ -200,8 +244,96 @@ export type Database = {
           origin?: string
           page_type?: string
           path?: string
+          reason?: string | null
           status_code?: number | null
           url?: string
+        }
+        Relationships: []
+      }
+      shortlist: {
+        Row: {
+          analyzed_at: string | null
+          avg_confidence: string | null
+          company_size: Json | null
+          contacts: Json | null
+          created_at: string | null
+          hq_location: Json | null
+          icp_fit: string | null
+          id: string
+          industry: Json | null
+          keywords_top: Json | null
+          name: string | null
+          notes: string | null
+          offerings_bulleted: Json | null
+          tags: string[] | null
+          target_audience_list: Json | null
+          tone_summary: string | null
+          updated_at: string | null
+          url: string
+          usp: Json | null
+        }
+        Insert: {
+          analyzed_at?: string | null
+          avg_confidence?: string | null
+          company_size?: Json | null
+          contacts?: Json | null
+          created_at?: string | null
+          hq_location?: Json | null
+          icp_fit?: string | null
+          id?: string
+          industry?: Json | null
+          keywords_top?: Json | null
+          name?: string | null
+          notes?: string | null
+          offerings_bulleted?: Json | null
+          tags?: string[] | null
+          target_audience_list?: Json | null
+          tone_summary?: string | null
+          updated_at?: string | null
+          url: string
+          usp?: Json | null
+        }
+        Update: {
+          analyzed_at?: string | null
+          avg_confidence?: string | null
+          company_size?: Json | null
+          contacts?: Json | null
+          created_at?: string | null
+          hq_location?: Json | null
+          icp_fit?: string | null
+          id?: string
+          industry?: Json | null
+          keywords_top?: Json | null
+          name?: string | null
+          notes?: string | null
+          offerings_bulleted?: Json | null
+          tags?: string[] | null
+          target_audience_list?: Json | null
+          tone_summary?: string | null
+          updated_at?: string | null
+          url?: string
+          usp?: Json | null
+        }
+        Relationships: []
+      }
+      shortlist_history: {
+        Row: {
+          created_at: string | null
+          id: string
+          shortlist_url: string
+          snapshot: Json
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          shortlist_url: string
+          snapshot: Json
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          shortlist_url?: string
+          snapshot?: Json
         }
         Relationships: []
       }
