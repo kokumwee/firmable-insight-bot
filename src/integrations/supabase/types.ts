@@ -119,6 +119,36 @@ export type Database = {
         }
         Relationships: []
       }
+      unverified_suggestions: {
+        Row: {
+          confidence: string
+          created_at: string
+          field: string
+          id: string
+          rationale: string
+          suggestion: string
+          url: string
+        }
+        Insert: {
+          confidence: string
+          created_at?: string
+          field: string
+          id?: string
+          rationale: string
+          suggestion: string
+          url: string
+        }
+        Update: {
+          confidence?: string
+          created_at?: string
+          field?: string
+          id?: string
+          rationale?: string
+          suggestion?: string
+          url?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

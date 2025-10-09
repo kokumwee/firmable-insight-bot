@@ -1,4 +1,4 @@
-import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone, Linkedin, Twitter, Facebook, Instagram, Info, Copy } from "lucide-react";
+import { ExternalLink, RefreshCw, MapPin, Users, Building2, Target, Mail, Phone, Linkedin, Twitter, Facebook, Instagram, Info, Copy, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -7,6 +7,9 @@ import { EvidencePopover } from "./EvidencePopover";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { UnverifiedSuggestionModal } from "./UnverifiedSuggestionModal";
+import { supabase } from "@/integrations/supabase/client";
+import { useState } from "react";
 
 interface Evidence {
   snippet: string;
@@ -63,6 +66,58 @@ interface CompanyCardProps {
 
 export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
   const { toast } = useToast();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [suggestionData, setSuggestionData] = useState<any>(null);
+  const [loadingField, setLoadingField] = useState<string | null>(null);
+
+  const handleSuggestUnverified = async (field: string) => {
+    setLoadingField(field);
+    try {
+      const { data: funcData, error: funcError } = await supabase.functions.invoke('suggest-unverified', {
+        body: { url: data.url, field }
+      });
+
+      if (funcError) throw funcError;
+
+      if (!funcData.ok) {
+        toast({
+          title: "Unable to suggest",
+          description: funcData.error?.message || "Field is already filled",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setSuggestionData(funcData.data);
+      setModalOpen(true);
+    } catch (error) {
+      console.error('Error getting suggestion:', error);
+      toast({
+        title: "Error",
+        description: "Failed to generate suggestion",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingField(null);
+    }
+  };
+
+  const shouldShowSuggestButton = (fieldValue: any, confidence?: ConfidenceLevel): boolean => {
+    if (!fieldValue) return true;
+    if (typeof fieldValue === 'object' && 'value' in fieldValue) {
+      if (!fieldValue.value) return true;
+    }
+    if (Array.isArray(fieldValue) && fieldValue.length === 0) return true;
+    return confidence === "low";
+  };
+
+  const getDomain = () => {
+    try {
+      return new URL(data.url).hostname;
+    } catch {
+      return undefined;
+    }
+  };
   
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
@@ -113,8 +168,31 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
           <div className="flex items-center gap-2">
             <Building2 className="h-5 w-5 text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Industry</p>
-              <p className="text-base font-semibold">{data.industry.value}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-muted-foreground">Industry</p>
+                {shouldShowSuggestButton(data.industry, data.industry.confidence) && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-6 px-2 text-xs"
+                          onClick={() => handleSuggestUnverified('industry')}
+                          disabled={loadingField === 'industry'}
+                        >
+                          <Sparkles className="h-3 w-3 mr-1" />
+                          Suggest (unverified)
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>AI guess. Not from this website.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
+              <p className="text-base font-semibold">{data.industry.value || "Not available"}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -130,8 +208,31 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
           <div className="flex items-center gap-2">
             <Users className="h-5 w-5 text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Company Size</p>
-              <p className="text-base font-semibold">{data.company_size.value}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-muted-foreground">Company Size</p>
+                {shouldShowSuggestButton(data.company_size, data.company_size.confidence) && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-6 px-2 text-xs"
+                          onClick={() => handleSuggestUnverified('company_size')}
+                          disabled={loadingField === 'company_size'}
+                        >
+                          <Sparkles className="h-3 w-3 mr-1" />
+                          Suggest (unverified)
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>AI guess. Not from this website.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
+              <p className="text-base font-semibold">{data.company_size.value || "Not available"}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -147,8 +248,31 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
           <div className="flex items-center gap-2">
             <MapPin className="h-5 w-5 text-muted-foreground" />
             <div>
-              <p className="text-sm font-medium text-muted-foreground">HQ Location</p>
-              <p className="text-base font-semibold">{data.hq_location.value}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-muted-foreground">HQ Location</p>
+                {shouldShowSuggestButton(data.hq_location, data.hq_location.confidence) && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-6 px-2 text-xs"
+                          onClick={() => handleSuggestUnverified('hq_location')}
+                          disabled={loadingField === 'hq_location'}
+                        >
+                          <Sparkles className="h-3 w-3 mr-1" />
+                          Suggest (unverified)
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>AI guess. Not from this website.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
+              <p className="text-base font-semibold">{data.hq_location.value || "Not available"}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -163,8 +287,31 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
         <div className="space-y-2">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-sm font-medium text-muted-foreground">Unique Value Proposition</p>
-              <p className="text-base font-semibold mt-1">{data.usp.value}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-muted-foreground">Unique Value Proposition</p>
+                {shouldShowSuggestButton(data.usp, data.usp.confidence) && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-6 px-2 text-xs"
+                          onClick={() => handleSuggestUnverified('usp')}
+                          disabled={loadingField === 'usp'}
+                        >
+                          <Sparkles className="h-3 w-3 mr-1" />
+                          Suggest (unverified)
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>AI guess. Not from this website.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
+              <p className="text-base font-semibold mt-1">{data.usp.value || "Not available"}</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <ConfidenceBadge level={data.usp.confidence} />
@@ -177,7 +324,30 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
 
         {/* Offerings */}
         <div className="space-y-2">
-          <p className="text-sm font-medium text-muted-foreground">Offerings / Services</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium text-muted-foreground">Offerings / Services</p>
+            {shouldShowSuggestButton(data.offerings_bulleted || data.offerings) && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-6 px-2 text-xs"
+                      onClick={() => handleSuggestUnverified('offerings')}
+                      disabled={loadingField === 'offerings'}
+                    >
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      Suggest (unverified)
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>AI guess. Not from this website.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
           {data.offerings_bulleted && data.offerings_bulleted.length > 0 ? (
             <ul className="space-y-2">
               {data.offerings_bulleted.map((offering, idx) => (
@@ -229,7 +399,30 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-2">
               <Target className="h-5 w-5 text-muted-foreground" />
-              <p className="text-sm font-medium text-muted-foreground">Target Audience</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium text-muted-foreground">Target Audience</p>
+                {shouldShowSuggestButton(data.target_audience_list || data.target_audience, data.target_audience?.confidence) && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-6 px-2 text-xs"
+                          onClick={() => handleSuggestUnverified('target_audience')}
+                          disabled={loadingField === 'target_audience'}
+                        >
+                          <Sparkles className="h-3 w-3 mr-1" />
+                          Suggest (unverified)
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>AI guess. Not from this website.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
             </div>
             {data.target_audience && (
               <div className="flex items-center gap-2">
@@ -349,6 +542,15 @@ export const CompanyCard = ({ data, onReanalyze }: CompanyCardProps) => {
           Re-analyze
         </Button>
       </CardFooter>
+      
+      {/* Unverified Suggestion Modal */}
+      <UnverifiedSuggestionModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        data={suggestionData}
+        companyName={data.name}
+        domain={getDomain()}
+      />
     </Card>
   );
 };

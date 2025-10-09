@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.ask]
 verify_jwt = false
+
+[functions.suggest-unverified]
+verify_jwt = false
