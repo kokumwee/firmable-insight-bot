@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Search } from "lucide-react";
+import { Search, Bookmark, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,6 +10,7 @@ import { EngagementInsights } from "@/components/EngagementInsights";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -53,7 +54,10 @@ const Index = () => {
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
+  const [engagementData, setEngagementData] = useState<any>(null);
+  const [savingToShortlist, setSavingToShortlist] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const handleAnalyze = async () => {
     if (!url.trim()) {
@@ -161,11 +165,61 @@ const Index = () => {
     handleAnalyze();
   };
 
+  const handleSaveToShortlist = async () => {
+    if (!companyData) return;
+    
+    setSavingToShortlist(true);
+    try {
+      // Fetch engagement insights if not already loaded
+      let engagement = engagementData;
+      if (!engagement) {
+        const { data: engData } = await supabase.functions.invoke('engagement-insights', {
+          body: { url: companyData.url }
+        });
+        if (engData?.ok) {
+          engagement = engData.data;
+          setEngagementData(engagement);
+        }
+      }
+
+      const { data, error } = await supabase.functions.invoke('shortlist', {
+        body: {
+          action: 'add',
+          companyCard: companyData,
+          engagement: engagement
+        }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message);
+
+      toast({
+        title: "Saved to Shortlist!",
+        description: "Company added to your shortlist successfully",
+      });
+    } catch (error) {
+      console.error('Error saving to shortlist:', error);
+      toast({
+        title: "Error",
+        description: "Failed to save to shortlist",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingToShortlist(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-12">
         {/* Header */}
         <header className="text-center mb-12 animate-fade-in">
+          <div className="flex justify-end mb-4">
+            <Button variant="outline" onClick={() => navigate('/shortlist')}>
+              <List className="h-4 w-4 mr-2" />
+              My Shortlist
+            </Button>
+          </div>
           <h1 className="text-5xl font-bold text-foreground mb-4">
             Firmable Demo – Kokum
           </h1>
@@ -221,6 +275,17 @@ const Index = () => {
         {/* Success State */}
         {state === "success" && companyData && (
           <div id="results" className="space-y-8">
+            <div className="flex justify-center mb-6">
+              <Button 
+                onClick={handleSaveToShortlist}
+                disabled={savingToShortlist}
+                size="lg"
+                className="gap-2"
+              >
+                <Bookmark className="h-5 w-5" />
+                {savingToShortlist ? "Saving..." : "Add to My Shortlist"}
+              </Button>
+            </div>
             <Tabs defaultValue="company" className="w-full max-w-4xl mx-auto">
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="company">Company Insights</TabsTrigger>
