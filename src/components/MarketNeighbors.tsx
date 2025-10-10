@@ -19,6 +19,7 @@ interface Neighbor {
   confidence: "high" | "medium" | "low" | "speculative";
   reason: string;
   source?: "verified" | "ai_suggested" | "ai_potential" | "websearch";
+  ai_type?: "suggested" | "competitor" | null;
   evidence?: Array<{ snippet: string; source_url: string }>;
 }
 
@@ -47,11 +48,9 @@ interface MarketNeighborsProps {
 
 export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketNeighborsProps) => {
   const [verifiedNeighbors, setVerifiedNeighbors] = useState<Neighbor[]>([]);
-  const [suggestedNeighbors, setSuggestedNeighbors] = useState<Neighbor[]>([]);
-  const [potentialNeighbors, setPotentialNeighbors] = useState<Neighbor[]>([]);
+  const [aiNeighbors, setAINeighbors] = useState<Neighbor[]>([]);
   const [loadingVerified, setLoadingVerified] = useState(false);
-  const [loadingSuggested, setLoadingSuggested] = useState(false);
-  const [loadingPotential, setLoadingPotential] = useState(false);
+  const [loadingAI, setLoadingAI] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerCard, setDrawerCard] = useState<CompactCard | null>(null);
@@ -89,51 +88,27 @@ export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketN
     }
   };
 
-  const loadSuggestedNeighbors = async () => {
-    setLoadingSuggested(true);
+  const loadAINeighbors = async () => {
+    setLoadingAI(true);
     try {
       const { data, error } = await supabase.functions.invoke('neighbors', {
-        body: { url: currentUrl, mode: 'suggested', companyCard, engagement }
+        body: { url: currentUrl, mode: 'ai', companyCard, engagement }
       });
 
       if (error) throw error;
-      if (!data.ok) throw new Error(data.error?.message || "Failed to load suggested neighbors");
+      if (!data.ok) throw new Error(data.error?.message || "Failed to load AI neighbors");
 
-      setSuggestedNeighbors(data.data || []);
+      setAINeighbors(data.data || []);
     } catch (error) {
-      console.error('Error loading suggested neighbors:', error);
+      console.error('Error loading AI neighbors:', error);
       toast({
         title: "Error",
-        description: "Failed to load suggested neighbors",
+        description: "Failed to load AI neighbors",
         variant: "destructive",
       });
-      setSuggestedNeighbors([]);
+      setAINeighbors([]);
     } finally {
-      setLoadingSuggested(false);
-    }
-  };
-
-  const loadPotentialNeighbors = async () => {
-    setLoadingPotential(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('neighbors', {
-        body: { url: currentUrl, mode: 'potential', companyCard, engagement }
-      });
-
-      if (error) throw error;
-      if (!data.ok) throw new Error(data.error?.message || "Failed to load potential competitors");
-
-      setPotentialNeighbors(data.data || []);
-    } catch (error) {
-      console.error('Error loading potential competitors:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load potential competitors",
-        variant: "destructive",
-      });
-      setPotentialNeighbors([]);
-    } finally {
-      setLoadingPotential(false);
+      setLoadingAI(false);
     }
   };
 
@@ -306,6 +281,16 @@ export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketN
                   from web search
                 </Badge>
               )}
+              {neighbor.ai_type === "competitor" && (
+                <Badge variant="outline" className="text-xs border-purple-300 text-purple-700">
+                  Competitor (AI)
+                </Badge>
+              )}
+              {neighbor.ai_type === "suggested" && (
+                <Badge variant="outline" className="text-xs border-blue-300 text-blue-700">
+                  Suggested (AI)
+                </Badge>
+              )}
             </div>
           </div>
           
@@ -364,15 +349,12 @@ export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketN
   return (
     <>
       <Tabs defaultValue="verified" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="verified">
-            Verified ({verifiedNeighbors.length})
+            Verified on Page ({verifiedNeighbors.length})
           </TabsTrigger>
-          <TabsTrigger value="suggested" onClick={() => !loadingSuggested && suggestedNeighbors.length === 0 && loadSuggestedNeighbors()}>
-            Suggested ({suggestedNeighbors.length})
-          </TabsTrigger>
-          <TabsTrigger value="potential" onClick={() => !loadingPotential && potentialNeighbors.length === 0 && loadPotentialNeighbors()}>
-            Potential ({potentialNeighbors.length})
+          <TabsTrigger value="ai" onClick={() => !loadingAI && aiNeighbors.length === 0 && loadAINeighbors()}>
+            AI Neighbors ({aiNeighbors.length})
           </TabsTrigger>
         </TabsList>
 
@@ -398,52 +380,24 @@ export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketN
           )}
         </TabsContent>
 
-        <TabsContent value="suggested" className="space-y-4">
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>
-              Unverified — not found on this homepage; may be incorrect. Some results from web search.
+        <TabsContent value="ai" className="space-y-4">
+          <Alert className="border-blue-200 bg-blue-50">
+            <AlertCircle className="h-4 w-4 text-blue-600" />
+            <AlertDescription className="text-blue-800">
+              AI-generated neighbors based on company traits and market knowledge. May include speculative results and web search.
             </AlertDescription>
           </Alert>
-          {loadingSuggested ? (
+          {loadingAI ? (
             <LoadingSkeleton />
-          ) : suggestedNeighbors.length === 0 ? (
+          ) : aiNeighbors.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
-                <p className="text-muted-foreground">No suggested neighbors available.</p>
+                <p className="text-muted-foreground">No AI neighbors available.</p>
               </CardContent>
             </Card>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {suggestedNeighbors.map((neighbor, idx) => (
-                <NeighborCard
-                  key={idx}
-                  neighbor={neighbor}
-                  isAnalyzing={analyzingUrls.includes(neighbor.website || '')}
-                />
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="potential" className="space-y-4">
-          <Alert className="border-purple-500/50 bg-purple-500/10">
-            <Sparkles className="h-4 w-4 text-purple-500" />
-            <AlertDescription>
-              AI-generated competitor landscape (off-site knowledge). May include web search results.
-            </AlertDescription>
-          </Alert>
-          {loadingPotential ? (
-            <LoadingSkeleton />
-          ) : potentialNeighbors.length === 0 ? (
-            <Card>
-              <CardContent className="p-8 text-center">
-                <p className="text-muted-foreground">No potential competitors available.</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              {potentialNeighbors.map((neighbor, idx) => (
+              {aiNeighbors.map((neighbor, idx) => (
                 <NeighborCard
                   key={idx}
                   neighbor={neighbor}

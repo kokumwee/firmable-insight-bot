@@ -16,6 +16,7 @@ interface Neighbor {
   confidence: "high" | "medium" | "low" | "speculative";
   reason: string;
   source?: "verified" | "ai_suggested" | "ai_potential" | "websearch";
+  ai_type?: "suggested" | "competitor" | null;
   evidence?: Array<{ snippet: string; source_url: string }>;
 }
 
@@ -400,11 +401,17 @@ serve(async (req) => {
       case "verified":
         neighbors = await neighbors_verified(url, companyCard);
         break;
-      case "suggested":
-        neighbors = await neighbors_fill(url, "suggested", companyCard, engagement);
-        break;
-      case "potential":
-        neighbors = await neighbors_fill(url, "potential", companyCard, engagement);
+      case "ai":
+        // Unified AI neighbors: merge suggested + potential + websearch
+        const suggested = await neighbors_fill(url, "suggested", companyCard, engagement);
+        const potential = await neighbors_fill(url, "potential", companyCard, engagement);
+        
+        // Tag sources
+        const taggedSuggested = suggested.map(n => ({ ...n, source: "ai_suggested" as const, ai_type: "suggested" as const }));
+        const taggedPotential = potential.map(n => ({ ...n, source: "ai_potential" as const, ai_type: "competitor" as const }));
+        
+        // Merge and deduplicate
+        neighbors = deduplicateNeighbors([...taggedSuggested, ...taggedPotential]).slice(0, TARGET_NEIGHBORS);
         break;
       default:
         return new Response(
