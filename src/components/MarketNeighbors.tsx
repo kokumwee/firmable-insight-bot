@@ -13,17 +13,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 
 interface Neighbor {
-  url: string;
   name: string;
-  tags?: string[];
-  description?: string;
-  favicon_url?: string;
-  similarity_score?: number;
-  similarity_reason?: string;
-}
-
-interface MarketNeighborsData {
-  neighbors: Neighbor[];
+  website: string | null;
+  relation: "competitor" | "alternative" | "partner" | "adjacent";
+  confidence: "high" | "medium" | "low" | "speculative";
+  reason: string;
+  source?: "verified" | "ai_suggested" | "ai_potential" | "websearch";
+  evidence?: Array<{ snippet: string; source_url: string }>;
 }
 
 interface CompactCard {
@@ -45,12 +41,17 @@ interface EngagementData {
 
 interface MarketNeighborsProps {
   currentUrl: string;
+  companyCard?: any;
+  engagement?: any;
 }
 
-export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
+export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketNeighborsProps) => {
   const [verifiedNeighbors, setVerifiedNeighbors] = useState<Neighbor[]>([]);
   const [suggestedNeighbors, setSuggestedNeighbors] = useState<Neighbor[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [potentialNeighbors, setPotentialNeighbors] = useState<Neighbor[]>([]);
+  const [loadingVerified, setLoadingVerified] = useState(false);
+  const [loadingSuggested, setLoadingSuggested] = useState(false);
+  const [loadingPotential, setLoadingPotential] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerCard, setDrawerCard] = useState<CompactCard | null>(null);
@@ -61,40 +62,78 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    loadNeighbors();
+    loadVerifiedNeighbors();
   }, [currentUrl]);
 
-  const loadNeighbors = async () => {
-    setLoading(true);
+  const loadVerifiedNeighbors = async () => {
+    setLoadingVerified(true);
     try {
-      const { data, error } = await supabase
-        .from('market_neighbors')
-        .select('neighbors')
-        .eq('url', currentUrl)
-        .single();
+      const { data, error } = await supabase.functions.invoke('neighbors', {
+        body: { url: currentUrl, mode: 'verified', companyCard, engagement }
+      });
 
-      if (error) {
-        if (error.code === 'PGRST116') {
-          // No data found, that's okay
-          setVerifiedNeighbors([]);
-          setSuggestedNeighbors([]);
-          return;
-        }
-        throw error;
-      }
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message || "Failed to load verified neighbors");
 
-      const neighbors = (data as unknown as MarketNeighborsData)?.neighbors || [];
-      setVerifiedNeighbors(neighbors);
-      setSuggestedNeighbors([]);
+      setVerifiedNeighbors(data.data || []);
     } catch (error) {
-      console.error('Error loading neighbors:', error);
+      console.error('Error loading verified neighbors:', error);
       toast({
         title: "Error",
-        description: "Failed to load market neighbors",
+        description: "Failed to load verified neighbors",
         variant: "destructive",
       });
+      setVerifiedNeighbors([]);
     } finally {
-      setLoading(false);
+      setLoadingVerified(false);
+    }
+  };
+
+  const loadSuggestedNeighbors = async () => {
+    setLoadingSuggested(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('neighbors', {
+        body: { url: currentUrl, mode: 'suggested', companyCard, engagement }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message || "Failed to load suggested neighbors");
+
+      setSuggestedNeighbors(data.data || []);
+    } catch (error) {
+      console.error('Error loading suggested neighbors:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load suggested neighbors",
+        variant: "destructive",
+      });
+      setSuggestedNeighbors([]);
+    } finally {
+      setLoadingSuggested(false);
+    }
+  };
+
+  const loadPotentialNeighbors = async () => {
+    setLoadingPotential(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('neighbors', {
+        body: { url: currentUrl, mode: 'potential', companyCard, engagement }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message || "Failed to load potential competitors");
+
+      setPotentialNeighbors(data.data || []);
+    } catch (error) {
+      console.error('Error loading potential competitors:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load potential competitors",
+        variant: "destructive",
+      });
+      setPotentialNeighbors([]);
+    } finally {
+      setLoadingPotential(false);
     }
   };
 
@@ -111,7 +150,7 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
   };
 
   const handleAnalyze = async (neighbor: Neighbor) => {
-    if (!neighbor.url) {
+    if (!neighbor.website) {
       toast({
         title: "No URL",
         description: "This neighbor has no website",
@@ -120,13 +159,13 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
       return;
     }
 
-    const normalizedUrl = normalizeUrl(neighbor.url);
+    const normalizedUrl = normalizeUrl(neighbor.website);
     setActiveUrl(normalizedUrl);
     setDrawerOpen(true);
     setDrawerLoading(true);
     setDrawerCard(null);
     setDrawerEngagement(null);
-    setAnalyzingUrls(prev => [...prev, neighbor.url]);
+    setAnalyzingUrls(prev => [...prev, neighbor.website!]);
 
     try {
       const { data: analyzeData, error: analyzeError } = await supabase.functions.invoke('analyze', {
@@ -171,7 +210,7 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
       setDrawerOpen(false);
     } finally {
       setDrawerLoading(false);
-      setAnalyzingUrls(prev => prev.filter(u => u !== neighbor.url));
+      setAnalyzingUrls(prev => prev.filter(u => u !== neighbor.website));
     }
   };
 
@@ -211,16 +250,20 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
   };
 
   const NeighborCard = ({ neighbor, isAnalyzing }: { neighbor: Neighbor; isAnalyzing: boolean }) => {
-    const getRelationBadgeVariant = (tags?: string[]) => {
-      if (!tags || tags.length === 0) return "secondary";
-      const tag = tags[0].toLowerCase();
-      if (tag.includes("competitor")) return "destructive";
-      if (tag.includes("alternative")) return "default";
-      if (tag.includes("partner")) return "secondary";
+    const getRelationBadgeVariant = (relation: string) => {
+      if (relation === "competitor") return "destructive";
+      if (relation === "alternative") return "default";
+      if (relation === "partner") return "secondary";
       return "outline";
     };
 
-    const hasWebsite = neighbor.url && neighbor.url.trim().length > 0;
+    const getConfidenceBadgeLevel = (confidence: string): "high" | "medium" | "low" => {
+      if (confidence === "high") return "high";
+      if (confidence === "medium") return "medium";
+      return "low";
+    };
+
+    const hasWebsite = neighbor.website && neighbor.website.trim().length > 0;
 
     return (
       <Card className="hover:shadow-md transition-shadow">
@@ -228,9 +271,9 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                {neighbor.favicon_url && (
+                {hasWebsite && (
                   <img 
-                    src={neighbor.favicon_url} 
+                    src={`https://www.google.com/s2/favicons?domain=${new URL(neighbor.website!).hostname}&sz=32`}
                     alt="" 
                     className="w-4 h-4"
                     onError={(e) => (e.currentTarget.style.display = 'none')}
@@ -240,37 +283,35 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
               </div>
               {hasWebsite && (
                 <a
-                  href={neighbor.url}
+                  href={neighbor.website!}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs text-muted-foreground hover:underline inline-flex items-center gap-1"
                 >
-                  {neighbor.url.replace(/^https?:\/\/(www\.)?/, '')}
+                  {neighbor.website!.replace(/^https?:\/\/(www\.)?/, '')}
                   <ExternalLink className="h-3 w-3" />
                 </a>
               )}
+              {!hasWebsite && (
+                <p className="text-xs text-muted-foreground">No website provided</p>
+              )}
             </div>
             <div className="flex flex-col items-end gap-1">
-              {neighbor.tags && neighbor.tags.length > 0 && (
-                <Badge variant={getRelationBadgeVariant(neighbor.tags)} className="text-xs">
-                  {neighbor.tags[0]}
+              <Badge variant={getRelationBadgeVariant(neighbor.relation)} className="text-xs capitalize">
+                {neighbor.relation}
+              </Badge>
+              <ConfidenceBadge level={getConfidenceBadgeLevel(neighbor.confidence)} />
+              {neighbor.source === "websearch" && (
+                <Badge variant="outline" className="text-xs text-muted-foreground">
+                  from web search
                 </Badge>
-              )}
-              {neighbor.similarity_score && (
-                <ConfidenceBadge 
-                  level={
-                    neighbor.similarity_score >= 0.9 ? "high" : 
-                    neighbor.similarity_score >= 0.8 ? "medium" : 
-                    "low"
-                  } 
-                />
               )}
             </div>
           </div>
           
-          {neighbor.similarity_reason && (
+          {neighbor.reason && (
             <p className="text-sm text-muted-foreground line-clamp-2">
-              {neighbor.similarity_reason}
+              {neighbor.reason}
             </p>
           )}
 
@@ -297,7 +338,7 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
                 variant="ghost"
                 asChild
               >
-                <a href={neighbor.url} target="_blank" rel="noopener noreferrer">
+                <a href={neighbor.website!} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4" />
                 </a>
               </Button>
@@ -308,34 +349,37 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        {[1, 2, 3].map(i => (
-          <Card key={i}>
-            <CardContent className="p-4">
-              <Skeleton className="h-20 w-full" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    );
-  }
+  const LoadingSkeleton = () => (
+    <div className="space-y-4">
+      {[1, 2, 3].map(i => (
+        <Card key={i}>
+          <CardContent className="p-4">
+            <Skeleton className="h-20 w-full" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
 
   return (
     <>
       <Tabs defaultValue="verified" className="w-full">
-        <TabsList className="grid w-full grid-cols-2">
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="verified">
-            Verified on Page ({verifiedNeighbors.length})
+            Verified ({verifiedNeighbors.length})
           </TabsTrigger>
-          <TabsTrigger value="suggested">
-            Suggested (Unverified) ({suggestedNeighbors.length})
+          <TabsTrigger value="suggested" onClick={() => !loadingSuggested && suggestedNeighbors.length === 0 && loadSuggestedNeighbors()}>
+            Suggested ({suggestedNeighbors.length})
+          </TabsTrigger>
+          <TabsTrigger value="potential" onClick={() => !loadingPotential && potentialNeighbors.length === 0 && loadPotentialNeighbors()}>
+            Potential ({potentialNeighbors.length})
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="verified" className="space-y-4">
-          {verifiedNeighbors.length === 0 ? (
+          {loadingVerified ? (
+            <LoadingSkeleton />
+          ) : verifiedNeighbors.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
                 <p className="text-muted-foreground">No market neighbors found on this page.</p>
@@ -347,7 +391,7 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
                 <NeighborCard
                   key={idx}
                   neighbor={neighbor}
-                  isAnalyzing={analyzingUrls.includes(neighbor.url)}
+                  isAnalyzing={analyzingUrls.includes(neighbor.website || '')}
                 />
               ))}
             </div>
@@ -358,10 +402,12 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              These are AI-suggested neighbors not found on the company's website. Treat with caution.
+              Unverified — not found on this homepage; may be incorrect. Some results from web search.
             </AlertDescription>
           </Alert>
-          {suggestedNeighbors.length === 0 ? (
+          {loadingSuggested ? (
+            <LoadingSkeleton />
+          ) : suggestedNeighbors.length === 0 ? (
             <Card>
               <CardContent className="p-8 text-center">
                 <p className="text-muted-foreground">No suggested neighbors available.</p>
@@ -373,7 +419,35 @@ export const MarketNeighbors = ({ currentUrl }: MarketNeighborsProps) => {
                 <NeighborCard
                   key={idx}
                   neighbor={neighbor}
-                  isAnalyzing={analyzingUrls.includes(neighbor.url)}
+                  isAnalyzing={analyzingUrls.includes(neighbor.website || '')}
+                />
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="potential" className="space-y-4">
+          <Alert className="border-purple-500/50 bg-purple-500/10">
+            <Sparkles className="h-4 w-4 text-purple-500" />
+            <AlertDescription>
+              AI-generated competitor landscape (off-site knowledge). May include web search results.
+            </AlertDescription>
+          </Alert>
+          {loadingPotential ? (
+            <LoadingSkeleton />
+          ) : potentialNeighbors.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <p className="text-muted-foreground">No potential competitors available.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {potentialNeighbors.map((neighbor, idx) => (
+                <NeighborCard
+                  key={idx}
+                  neighbor={neighbor}
+                  isAnalyzing={analyzingUrls.includes(neighbor.website || '')}
                 />
               ))}
             </div>

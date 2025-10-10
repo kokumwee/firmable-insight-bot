@@ -318,7 +318,11 @@ const Index = () => {
                 <EngagementInsights url={companyData.url} />
               </TabsContent>
               <TabsContent value="neighbors">
-                <MarketNeighbors currentUrl={companyData.url} />
+            <MarketNeighbors 
+              currentUrl={companyData.url} 
+              companyCard={companyData}
+              engagement={engagementData}
+            />
               </TabsContent>
             </Tabs>
             <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
