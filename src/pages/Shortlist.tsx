@@ -23,6 +23,7 @@ import {
   AlertDialogTitle 
 } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface ShortlistItem {
   id: string;
@@ -207,6 +208,47 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
     return new Date(dateString).toLocaleDateString();
   };
 
+  const formatRelativeTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    
+    if (diffDays > 7) return `${Math.floor(diffDays / 7)}w ago`;
+    if (diffDays > 0) return `${diffDays}d ago`;
+    if (diffHours > 0) return `${diffHours}h ago`;
+    return "Just now";
+  };
+
+  const truncateText = (text: string | undefined, maxLength: number) => {
+    if (!text) return "—";
+    return text.length > maxLength ? text.slice(0, maxLength) + "..." : text;
+  };
+
+  const formatOfferings = (offerings: any[] | null) => {
+    if (!offerings || offerings.length === 0) return "—";
+    return offerings.slice(0, 3).map((o: any) => o.bullet).join(" • ");
+  };
+
+  const formatAudience = (audience: string[] | null) => {
+    if (!audience || audience.length === 0) return "—";
+    return audience.slice(0, 3).join(" • ");
+  };
+
+  const formatKeywords = (keywords: Array<{ term: string; weight: number }> | null) => {
+    if (!keywords || keywords.length === 0) return "—";
+    return keywords.slice(0, 3).map(k => k.term).join(", ");
+  };
+
+  const getDomain = (url: string) => {
+    try {
+      return new URL(url).hostname.replace('www.', '');
+    } catch {
+      return url;
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background p-8">
@@ -283,8 +325,8 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
               Go to Company Insights
             </Button>
           </div>
-        ) : (
-          <div className={viewMode === "cards" ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" : "space-y-4"}>
+        ) : viewMode === "cards" ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {items.map((item) => (
               <Sheet key={item.id}>
                 <SheetTrigger asChild>
@@ -538,6 +580,153 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
                 </SheetContent>
               </Sheet>
             ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border bg-card overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[200px]">Company</TableHead>
+                  <TableHead>Industry</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>HQ</TableHead>
+                  <TableHead className="w-[200px]">USP</TableHead>
+                  <TableHead className="w-[180px]">Offerings</TableHead>
+                  <TableHead className="w-[180px]">Audience</TableHead>
+                  <TableHead>Tone</TableHead>
+                  <TableHead className="w-[150px]">Keywords</TableHead>
+                  <TableHead>Confidence</TableHead>
+                  <TableHead>Analyzed</TableHead>
+                  <TableHead className="w-[200px]">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell>
+                      <div className="space-y-1">
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-medium hover:underline flex items-center gap-2"
+                        >
+                          <img 
+                            src={`https://www.google.com/s2/favicons?domain=${getDomain(item.url)}&sz=32`} 
+                            alt="" 
+                            className="w-4 h-4"
+                          />
+                          {item.name}
+                        </a>
+                        <p className="text-xs text-muted-foreground">{getDomain(item.url)}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm">{item.industry?.value || "—"}</TableCell>
+                    <TableCell className="text-sm">{item.company_size?.value || "—"}</TableCell>
+                    <TableCell className="text-sm">{item.hq_location?.value || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {truncateText(item.usp?.value, 120)}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {formatOfferings(item.offerings_bulleted)}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {formatAudience(item.target_audience_list)}
+                    </TableCell>
+                    <TableCell className="text-sm">{item.tone_summary || "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {formatKeywords(item.keywords_top)}
+                    </TableCell>
+                    <TableCell>
+                      <ConfidenceBadge level={item.avg_confidence as ConfidenceLevel} />
+                    </TableCell>
+                    <TableCell>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="text-sm cursor-help">{formatRelativeTime(item.analyzed_at)}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>{formatDate(item.analyzed_at)}</TooltipContent>
+                      </Tooltip>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleReanalyze(item.url)}
+                                disabled={reanalyzingUrl === item.url}
+                              >
+                                {reanalyzingUrl === item.url ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Re-Analyze</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleViewInsights(item.url)}
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>View Insights</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleGenerateOutreach(item.url)}
+                              >
+                                <Mail className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Generate Outreach</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleCopySummary(item)}
+                              >
+                                <Copy className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Copy Summary</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setItemToRemove(item)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Remove</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
       </div>
