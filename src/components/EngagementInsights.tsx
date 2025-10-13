@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Copy, TrendingUp, MessageSquare, Lightbulb, Sparkles, RefreshCw, Newspaper, ChevronDown, ChevronUp } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Copy, TrendingUp, MessageSquare, Lightbulb, Sparkles, RefreshCw, Newspaper, ChevronDown, ChevronUp, AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,36 +36,42 @@ interface EngagementData {
 interface NewsGroup {
   label: string;
   blurb: string;
-  why_it_matters?: string;
+  why_it_matters?: string | null;
+  links: Array<{ url: string; title: string; published_at?: string }>;
 }
 
 interface NewsSummary {
   summary: string;
-  why_it_matters?: string;
-  groups?: NewsGroup[];
-  article_count: number;
+  why_it_matters: string;
+  groups: NewsGroup[];
+  sources: string[];
   generated_at: string;
+  article_count: number;
 }
 
 interface EngagementInsightsProps {
   url: string;
+  newsData?: NewsSummary | null;
+  newsLoading?: boolean;
+  newsError?: string | null;
+  onRefreshNews?: () => void;
 }
 
-export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
+export const EngagementInsights = ({ 
+  url, 
+  newsData, 
+  newsLoading: newsLoadingProp = false, 
+  newsError = null,
+  onRefreshNews
+}: EngagementInsightsProps) => {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<EngagementData | null>(null);
-  const [newsLoading, setNewsLoading] = useState(true);
-  const [newsSummary, setNewsSummary] = useState<NewsSummary | null>(null);
   const [showGroups, setShowGroups] = useState(false);
   const [assistantState, setAssistantState] = useState<'idle' | 'active' | 'result'>('idle');
   const [userContext, setUserContext] = useState('');
   const [generatedMessage, setGeneratedMessage] = useState('');
   const [generating, setGenerating] = useState(false);
   const { toast } = useToast();
-
-  const toUrlKey = (url: string) => {
-    return url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '');
-  };
 
   useEffect(() => {
     const fetchInsights = async () => {
@@ -95,88 +102,6 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
 
     fetchInsights();
   }, [url, toast]);
-
-  useEffect(() => {
-    const fetchNews = async () => {
-      setNewsLoading(true);
-      try {
-        const urlKey = toUrlKey(url);
-        
-        // Check cache first
-        const { data: existing } = await supabase
-          .from('company_news_summaries')
-          .select('*')
-          .eq('url_key', urlKey)
-          .maybeSingle();
-
-        const now = Date.now();
-        const isStale = existing && (now - new Date(existing.generated_at).getTime() > 24 * 60 * 60 * 1000);
-        
-        // Fetch fresh if missing or stale
-        if (!existing || existing.article_count === 0 || isStale) {
-          const { data: response, error } = await supabase.functions.invoke('news-summary', {
-            body: { action: 'build', url_key: urlKey, force: true }
-          });
-
-          if (error) throw error;
-          
-          if (response?.ok && response?.summary) {
-            setNewsSummary({
-              ...response.summary,
-              groups: (response.summary.groups || []) as unknown as NewsGroup[]
-            });
-          } else {
-            setNewsSummary(null);
-          }
-        } else {
-          setNewsSummary({
-            ...existing,
-            groups: (existing.groups || []) as unknown as NewsGroup[]
-          });
-        }
-      } catch (error) {
-        console.error('Error fetching company news:', error);
-        // Don't show error toast for news, just fail silently
-        setNewsSummary(null);
-      } finally {
-        setNewsLoading(false);
-      }
-    };
-
-    fetchNews();
-  }, [url, toast]);
-
-  const refreshNews = async () => {
-    setNewsLoading(true);
-    try {
-      const urlKey = toUrlKey(url);
-      const { data: response, error } = await supabase.functions.invoke('news-summary', {
-        body: { action: 'build', url_key: urlKey, force: true }
-      });
-
-      if (error) throw error;
-      
-      if (response?.ok && response?.summary) {
-        setNewsSummary({
-          ...response.summary,
-          groups: (response.summary.groups || []) as unknown as NewsGroup[]
-        });
-        toast({
-          title: "News refreshed",
-          description: "Company news summary has been updated",
-        });
-      }
-    } catch (error) {
-      console.error('Error refreshing news:', error);
-      toast({
-        title: "Refresh failed",
-        description: "Could not refresh company news",
-        variant: "destructive",
-      });
-    } finally {
-      setNewsLoading(false);
-    }
-  };
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -372,17 +297,19 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
               <Newspaper className="h-5 w-5" />
               Company News (last 30 days)
             </CardTitle>
-            {!newsLoading && newsSummary && (
+            {!newsLoadingProp && newsData && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span>Last updated • {formatDistanceToNow(new Date(newsSummary.generated_at), { addSuffix: true })}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={refreshNews}
-                  disabled={newsLoading}
-                >
-                  <RefreshCw className="h-3 w-3" />
-                </Button>
+                <span>Last updated • {formatDistanceToNow(new Date(newsData.generated_at), { addSuffix: true })}</span>
+                {onRefreshNews && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onRefreshNews}
+                    disabled={newsLoadingProp}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -391,36 +318,48 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {newsLoading ? (
+          {newsLoadingProp ? (
             <div className="space-y-3">
               <Skeleton className="h-4 w-full" />
               <Skeleton className="h-4 w-5/6" />
               <Skeleton className="h-4 w-4/5" />
             </div>
-          ) : !newsSummary || newsSummary.article_count === 0 ? (
+          ) : newsError ? (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between">
+                <span>{newsError}</span>
+                {onRefreshNews && (
+                  <Button variant="outline" size="sm" onClick={onRefreshNews}>
+                    Retry
+                  </Button>
+                )}
+              </AlertDescription>
+            </Alert>
+          ) : !newsData || newsData.article_count === 0 ? (
             <p className="text-sm text-muted-foreground italic">
               No company news in the last 30 days.
             </p>
           ) : (
             <>
               {/* Neutral summary */}
-              <p className="text-sm leading-relaxed">{newsSummary.summary}</p>
+              <p className="text-sm leading-relaxed">{newsData.summary}</p>
 
               {/* Why this matters */}
-              {newsSummary.why_it_matters && (
+              {newsData.why_it_matters && (
                 <div className="border-l-4 border-primary bg-primary/5 p-4 rounded-r-lg space-y-1">
                   <p className="text-sm font-semibold text-primary flex items-center gap-2">
                     <Lightbulb className="h-4 w-4" />
                     Why this matters to you
                   </p>
                   <p className="text-sm text-foreground leading-relaxed">
-                    {newsSummary.why_it_matters}
+                    {newsData.why_it_matters}
                   </p>
                 </div>
               )}
 
               {/* Groups toggle */}
-              {newsSummary.groups && newsSummary.groups.length > 0 && (
+              {newsData.groups && newsData.groups.length > 0 && (
                 <div className="space-y-3">
                   <Button
                     variant="outline"
@@ -436,14 +375,14 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
                     ) : (
                       <>
                         <ChevronDown className="h-4 w-4 mr-2" />
-                        View groups ({newsSummary.groups.length})
+                        View groups ({newsData.groups.length})
                       </>
                     )}
                   </Button>
 
                   {showGroups && (
                     <div className="space-y-3 pl-4 border-l-2 border-muted">
-                      {newsSummary.groups.map((group, idx) => (
+                      {newsData.groups.map((group, idx) => (
                         <div key={idx} className="space-y-1">
                           <p className="text-sm font-medium">{group.label}</p>
                           <p className="text-xs text-muted-foreground leading-relaxed">
@@ -459,6 +398,13 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Sources footer */}
+              {newsData.sources && newsData.sources.length > 0 && (
+                <p className="text-xs text-muted-foreground pt-2">
+                  Sources: {newsData.sources.join(', ')}
+                </p>
               )}
             </>
           )}

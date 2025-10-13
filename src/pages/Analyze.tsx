@@ -14,6 +14,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useExploreData } from "@/hooks/useExploreData";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -64,6 +65,13 @@ export default function Analyze() {
   const { toast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Orchestrate data fetching for Explore (News + Neighbors)
+  const exploreData = useExploreData(
+    state === 'success' && companyData ? companyData.url : undefined,
+    companyData,
+    engagementData
+  );
 
   // Handle preload from navigation state
   useEffect(() => {
@@ -365,13 +373,24 @@ export default function Analyze() {
               <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
             </TabsContent>
             <TabsContent value="engagement">
-              <EngagementInsights url={companyData.url} />
+              <EngagementInsights 
+                url={companyData.url}
+                newsData={exploreData.news.data}
+                newsLoading={exploreData.news.status === 'loading'}
+                newsError={exploreData.news.error}
+                onRefreshNews={exploreData.refresh.news}
+              />
             </TabsContent>
             <TabsContent value="neighbors">
               <MarketNeighbors 
                 currentUrl={companyData.url} 
                 companyCard={companyData}
                 engagement={engagementData}
+                verifiedNeighbors={exploreData.neighbors.data?.verified || []}
+                aiNeighbors={exploreData.neighbors.data?.ai || []}
+                loadingVerified={exploreData.neighbors.status === 'loading'}
+                loadingAI={exploreData.neighbors.status === 'loading'}
+                onRefreshNeighbors={exploreData.refresh.neighbors}
               />
             </TabsContent>
           </Tabs>

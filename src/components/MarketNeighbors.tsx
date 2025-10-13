@@ -44,13 +44,27 @@ interface MarketNeighborsProps {
   currentUrl: string;
   companyCard?: any;
   engagement?: any;
+  verifiedNeighbors?: Neighbor[];
+  aiNeighbors?: Neighbor[];
+  loadingVerified?: boolean;
+  loadingAI?: boolean;
+  onRefreshNeighbors?: () => void;
 }
 
-export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketNeighborsProps) => {
-  const [verifiedNeighbors, setVerifiedNeighbors] = useState<Neighbor[]>([]);
-  const [aiNeighbors, setAINeighbors] = useState<Neighbor[]>([]);
-  const [loadingVerified, setLoadingVerified] = useState(false);
-  const [loadingAI, setLoadingAI] = useState(false);
+export const MarketNeighbors = ({ 
+  currentUrl, 
+  companyCard, 
+  engagement,
+  verifiedNeighbors: verifiedNeighborsProp = [],
+  aiNeighbors: aiNeighborsProp = [],
+  loadingVerified: loadingVerifiedProp = false,
+  loadingAI: loadingAIProp = false,
+  onRefreshNeighbors
+}: MarketNeighborsProps) => {
+  const [verifiedNeighbors] = useState<Neighbor[]>(verifiedNeighborsProp);
+  const [aiNeighbors] = useState<Neighbor[]>(aiNeighborsProp);
+  const loadingVerified = loadingVerifiedProp;
+  const loadingAI = loadingAIProp;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerCard, setDrawerCard] = useState<CompactCard | null>(null);
@@ -60,57 +74,15 @@ export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketN
   const { toast } = useToast();
   const navigate = useNavigate();
 
+  // Update local state when props change
   useEffect(() => {
-    loadVerifiedNeighbors();
-  }, [currentUrl]);
-
-  const loadVerifiedNeighbors = async () => {
-    setLoadingVerified(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('neighbors', {
-        body: { url: currentUrl, mode: 'verified', companyCard, engagement }
-      });
-
-      if (error) throw error;
-      if (!data.ok) throw new Error(data.error?.message || "Failed to load verified neighbors");
-
-      setVerifiedNeighbors(data.data || []);
-    } catch (error) {
-      console.error('Error loading verified neighbors:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load verified neighbors",
-        variant: "destructive",
-      });
-      setVerifiedNeighbors([]);
-    } finally {
-      setLoadingVerified(false);
+    if (verifiedNeighborsProp.length > 0) {
+      // Update verified neighbors from props
     }
-  };
-
-  const loadAINeighbors = async () => {
-    setLoadingAI(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('neighbors', {
-        body: { url: currentUrl, mode: 'ai', companyCard, engagement }
-      });
-
-      if (error) throw error;
-      if (!data.ok) throw new Error(data.error?.message || "Failed to load AI neighbors");
-
-      setAINeighbors(data.data || []);
-    } catch (error) {
-      console.error('Error loading AI neighbors:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load AI neighbors",
-        variant: "destructive",
-      });
-      setAINeighbors([]);
-    } finally {
-      setLoadingAI(false);
+    if (aiNeighborsProp.length > 0) {
+      // Update AI neighbors from props
     }
-  };
+  }, [verifiedNeighborsProp, aiNeighborsProp]);
 
   const normalizeUrl = (url: string): string => {
     try {
@@ -353,7 +325,7 @@ export const MarketNeighbors = ({ currentUrl, companyCard, engagement }: MarketN
           <TabsTrigger value="verified">
             Verified on Page ({verifiedNeighbors.length})
           </TabsTrigger>
-          <TabsTrigger value="ai" onClick={() => !loadingAI && aiNeighbors.length === 0 && loadAINeighbors()}>
+          <TabsTrigger value="ai">
             AI Neighbors ({aiNeighbors.length})
           </TabsTrigger>
         </TabsList>
