@@ -47,6 +47,18 @@ serve(async (req) => {
       );
     }
 
+    // Get recent company news (last 30 days) for context
+    const urlKey = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: newsItems } = await supabase
+      .from('company_news')
+      .select('title, summary, quote, published_at, sources')
+      .eq('url_key', urlKey)
+      .eq('deleted', false)
+      .gte('published_at', thirtyDaysAgo)
+      .order('relevance', { ascending: false })
+      .limit(2);
+
     // Get company card
     const { data: companyCard } = await supabase
       .from('company_cards')
@@ -73,7 +85,8 @@ serve(async (req) => {
       },
       brand_tone: insights.outreach_guidance?.recommended_tone || "Professional",
       recommended_words: insights.outreach_guidance?.recommended_words || [],
-      user_context: userContext
+      user_context: userContext,
+      news_context: newsItems || []
     };
 
     // Call Lovable AI
@@ -106,6 +119,9 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 - If my_company.tone is set, harmonize it with the target brand_tone
 - Weave my_company.keywords naturally only if they fit
 - If my_company fields are null, skip them (don't mention the sender's company)
+
+If news_context is provided, reference one relevant, factual event (max 1 sentence) to make the message timely.
+Do not invent facts or include URLs.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

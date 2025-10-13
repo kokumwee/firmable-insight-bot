@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.shortlist]
 verify_jwt = false
+
+[functions.outreach]
+verify_jwt = false
