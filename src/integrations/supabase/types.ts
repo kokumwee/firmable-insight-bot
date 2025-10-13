@@ -251,6 +251,7 @@ export type Database = {
           tone_summary: string | null
           updated_at: string | null
           url: string | null
+          url_key: string | null
           usp: Json | null
         }
         Insert: {
@@ -271,6 +272,7 @@ export type Database = {
           tone_summary?: string | null
           updated_at?: string | null
           url?: string | null
+          url_key?: string | null
           usp?: Json | null
         }
         Update: {
@@ -291,6 +293,7 @@ export type Database = {
           tone_summary?: string | null
           updated_at?: string | null
           url?: string | null
+          url_key?: string | null
           usp?: Json | null
         }
         Relationships: []

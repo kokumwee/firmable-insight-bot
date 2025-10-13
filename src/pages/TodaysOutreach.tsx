@@ -27,7 +27,6 @@ interface OutreachTask {
   recommended_at: string;
   reason_code: 'news' | 'site_update' | 'linkedin' | 'stale';
   priority: number;
-  reason: string;
   status: string;
   news_cluster_ids?: string[];
   customer: {
@@ -67,12 +66,19 @@ export default function TodaysOutreach() {
   const loadTasks = async () => {
     setLoading(true);
     try {
+      // Check for debug mode
+      const isDebug = new URLSearchParams(location.search).has('outreachDebug');
+      
       const { data, error } = await supabase.functions.invoke('outreach', {
         body: { action: 'list_today' }
       });
 
       if (error) throw error;
-      if (!data.ok) throw new Error('Failed to load tasks');
+      
+      if (!data.ok) {
+        const errorMsg = `${data.message || 'Failed to load tasks'}${data.details ? ': ' + data.details : ''}`;
+        throw new Error(errorMsg);
+      }
 
       const tasks = data.tasks || [];
       setTasks(tasks);
@@ -82,11 +88,15 @@ export default function TodaysOutreach() {
         console.log('No tasks found, auto-building...');
         await handleRefresh();
       }
+
+      if (isDebug && data.debug) {
+        console.log('[OUTREACH DEBUG]', data.debug);
+      }
     } catch (error) {
       console.error('Error loading tasks:', error);
       toast({
-        title: "Error",
-        description: "Failed to load today's outreach tasks",
+        title: "Error loading tasks",
+        description: error instanceof Error ? error.message : "Failed to load today's outreach tasks",
         variant: "destructive",
       });
     } finally {
@@ -97,23 +107,36 @@ export default function TodaysOutreach() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
+      // Check for debug mode
+      const isDebug = new URLSearchParams(location.search).has('outreachDebug');
+      
       const { data, error } = await supabase.functions.invoke('outreach', {
-        body: { action: 'build_today', force: true }
+        body: { action: 'build_today', force: true, debug: isDebug }
       });
 
       if (error) throw error;
-      if (!data.ok) throw new Error('Failed to rebuild tasks');
+      
+      if (!data.ok) {
+        const errorMsg = `${data.message || 'Failed to rebuild tasks'}${data.details ? ': ' + data.details : ''}`;
+        throw new Error(errorMsg);
+      }
 
+      if (isDebug && data.debug) {
+        console.log('[OUTREACH DEBUG]', data.debug);
+      }
+
+      const count = data.inserted ?? data.count ?? 0;
       toast({
         title: "Refreshed",
-        description: `Found ${data.count} tasks for today`,
+        description: `Found ${count} task${count === 1 ? '' : 's'} for today`,
       });
+      
       await loadTasks();
     } catch (error) {
       console.error('Error refreshing tasks:', error);
       toast({
-        title: "Error",
-        description: "Failed to refresh tasks",
+        title: "Error refreshing tasks",
+        description: error instanceof Error ? error.message : "Failed to refresh tasks",
         variant: "destructive",
       });
     } finally {
@@ -185,7 +208,11 @@ export default function TodaysOutreach() {
       });
 
       if (error) throw error;
-      if (!data.ok) throw new Error('Failed to mark as done');
+      
+      if (!data.ok) {
+        const errorMsg = `${data.message || 'Failed to mark as done'}${data.details ? ': ' + data.details : ''}`;
+        throw new Error(errorMsg);
+      }
 
       toast({
         title: "Done!",
@@ -196,8 +223,8 @@ export default function TodaysOutreach() {
       // Rollback
       await loadTasks();
       toast({
-        title: "Error",
-        description: "Failed to mark as done",
+        title: "Error marking as done",
+        description: error instanceof Error ? error.message : "Failed to mark as done",
         variant: "destructive",
       });
     }
@@ -223,7 +250,11 @@ export default function TodaysOutreach() {
       });
 
       if (error) throw error;
-      if (!data.ok) throw new Error('Failed to snooze');
+      
+      if (!data.ok) {
+        const errorMsg = `${data.message || 'Failed to snooze'}${data.details ? ': ' + data.details : ''}`;
+        throw new Error(errorMsg);
+      }
 
       toast({
         title: "Snoozed",
@@ -234,8 +265,8 @@ export default function TodaysOutreach() {
       // Rollback
       await loadTasks();
       toast({
-        title: "Error",
-        description: "Failed to snooze task",
+        title: "Error snoozing task",
+        description: error instanceof Error ? error.message : "Failed to snooze task",
         variant: "destructive",
       });
     }
@@ -258,6 +289,24 @@ export default function TodaysOutreach() {
       case 'linkedin': return '👤 New Hire';
       case 'stale': return '⏰ Follow-up Due';
       default: return 'Other';
+    }
+  };
+
+  const getReasonText = (task: OutreachTask) => {
+    switch (task.reason_code) {
+      case 'news':
+        return 'Recent company news';
+      case 'site_update':
+        return 'Website recently updated';
+      case 'linkedin':
+        return 'New hiring activity detected';
+      case 'stale':
+        const daysSince = task.customer.last_contacted_at 
+          ? Math.floor((Date.now() - new Date(task.customer.last_contacted_at).getTime()) / (1000 * 60 * 60 * 24))
+          : 999;
+        return `No contact for ${daysSince} days`;
+      default:
+        return 'Outreach recommended';
     }
   };
 
@@ -378,7 +427,7 @@ export default function TodaysOutreach() {
                 <CardContent className="space-y-4">
                   {/* Context based on reason */}
                   <div className="bg-muted/50 rounded-lg p-4">
-                    <p className="text-sm font-medium mb-2">{task.reason}</p>
+                    <p className="text-sm font-medium mb-2">{getReasonText(task)}</p>
                     
                     {task.reason_code === 'news' && task.news && task.news.length > 0 && (
                       <div className="space-y-3">

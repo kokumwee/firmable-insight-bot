@@ -6,20 +6,35 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Timezone-safe "today" in Australia/Melbourne
+function localTodayAU(): string {
+  const now = new Date();
+  const au = new Intl.DateTimeFormat('en-AU', { 
+    timeZone: 'Australia/Melbourne', 
+    year: 'numeric', 
+    month: '2-digit', 
+    day: '2-digit' 
+  }).formatToParts(now).reduce((a, p) => {
+    a[p.type] = p.value;
+    return a;
+  }, {} as any);
+  return `${au.year}-${au.month}-${au.day}`;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { action, taskId, updates, force } = await req.json();
+    const { action, taskId, updates, force, debug } = await req.json();
     
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     if (action === 'build_today') {
-      return await buildToday(supabase, force);
+      return await buildToday(supabase, force, debug);
     } else if (action === 'list_today') {
       return await listToday(supabase);
     } else if (action === 'update') {
@@ -27,226 +42,274 @@ serve(async (req) => {
     }
 
     return new Response(
-      JSON.stringify({ ok: false, error: 'Invalid action' }),
+      JSON.stringify({ ok: false, message: 'INVALID_ACTION' }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
     console.error('Error in outreach function:', error);
     return new Response(
-      JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ 
+        ok: false, 
+        message: 'FUNCTION_ERROR',
+        details: error instanceof Error ? error.message : 'Unknown error' 
+      }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
 
-async function buildToday(supabase: any, force: boolean) {
-  const today = new Date().toISOString().split('T')[0];
-  
-  // Check if we already built today (unless force)
-  if (!force) {
-    const { data: existing } = await supabase
-      .from('outreach_tasks')
-      .select('id')
-      .eq('recommended_at', today)
-      .limit(1)
-      .maybeSingle();
-    
-    if (existing) {
-      console.log('Tasks already built for today');
+async function buildToday(supabase: any, force: boolean, debug?: boolean) {
+  try {
+    const today = localTodayAU();
+    const debugInfo: any = { today, signals: { stale: 0, site_update: 0, linkedin: 0, news: 0 } };
+
+    if (debug) console.log('[DEBUG] Today:', today);
+
+    // 1) Optionally clear today's tasks on force
+    if (force) {
+      const { error: delError } = await supabase
+        .from('outreach_tasks')
+        .delete()
+        .eq('recommended_at', today);
+      
+      if (delError) {
+        console.error('DELETE_FAIL:', delError.message);
+        return new Response(
+          JSON.stringify({ ok: false, message: 'DELETE_FAIL', details: delError.message }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (debug) console.log('[DEBUG] Cleared existing tasks for today');
+    }
+
+    // 2) Fetch active customers
+    const { data: customers, error: cErr } = await supabase
+      .from('customers')
+      .select('id, url, url_key, last_contacted_at, recently_updated, linkedin_summary');
+
+    if (cErr) {
+      console.error('CUSTOMERS_READ_FAIL:', cErr.message);
       return new Response(
-        JSON.stringify({ ok: true, message: 'Already built', count: 0 }),
+        JSON.stringify({ ok: false, message: 'CUSTOMERS_READ_FAIL', details: cErr.message }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-  }
 
-  // Fetch all active customers
-  const { data: customers, error: customersError } = await supabase
-    .from('customers')
-    .select('*');
+    if (debug) console.log('[DEBUG] Customers read:', customers?.length || 0);
 
-  if (customersError) throw customersError;
+    const tasksToUpsert = [];
+    const now = Date.now();
+    const fourteenDaysMs = 14 * 24 * 3600 * 1000;
+    const thirtyDaysMs = 30 * 24 * 3600 * 1000;
 
-  const tasks = [];
-  const now = new Date();
-  const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    // 3) For each customer, compute signals
+    for (const c of customers || []) {
+      const urlKey = c.url_key ?? (c.url ? c.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : null);
 
-  for (const customer of customers) {
-    const signals = [];
-    let reasonCode = null;
-    let priority = 3;
-    let newsClusterIds = null;
+      // stale
+      const stale = !c.last_contacted_at || (new Date(c.last_contacted_at).getTime() < now - fourteenDaysMs);
+      if (stale) debugInfo.signals.stale++;
 
-    // Check for recent news (P1 - highest priority)
-    const urlKey = customer.url 
-      ? customer.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]
-      : null;
-    
-    if (!urlKey) continue; // Skip customers without valid URL
+      // site update
+      const site_update = !!c.recently_updated;
+      if (site_update) debugInfo.signals.site_update++;
 
-    const { data: news } = await supabase
-      .from('company_news')
-      .select('id, relevance')
-      .eq('url_key', urlKey)
-      .eq('deleted', false)
-      .gte('published_at', thirtyDaysAgo.toISOString())
-      .order('relevance', { ascending: false })
-      .limit(2);
+      // linkedin
+      const linkedinText = (c.linkedin_summary || '').toLowerCase();
+      const linkedin = /new .*hire|promoted|joins as|vp |head /.test(linkedinText);
+      if (linkedin) debugInfo.signals.linkedin++;
 
-    if (news && news.length > 0) {
-      signals.push('news');
-      reasonCode = 'news';
-      priority = 1;
-      newsClusterIds = news.map((n: any) => n.id);
-    }
+      // news in last 30d
+      let news = false;
+      let newsIds: string[] = [];
+      if (urlKey) {
+        const { data: topNews } = await supabase
+          .from('company_news')
+          .select('id')
+          .eq('url_key', urlKey)
+          .eq('deleted', false)
+          .gte('published_at', new Date(now - thirtyDaysMs).toISOString())
+          .order('published_at', { ascending: false })
+          .limit(2);
+        
+        news = (topNews?.length ?? 0) > 0;
+        newsIds = (topNews ?? []).map((n: any) => n.id);
+        if (news) debugInfo.signals.news++;
+      }
 
-    // Check for site update (P2)
-    if (customer.recently_updated && !reasonCode) {
-      signals.push('site_update');
-      reasonCode = 'site_update';
-      priority = 2;
-    }
+      if (!stale && !site_update && !linkedin && !news) continue;
 
-    // Check for LinkedIn signals (P2)
-    if (customer.linkedin_summary && 
-        (customer.linkedin_summary.toLowerCase().includes('new hire') || 
-         customer.linkedin_summary.toLowerCase().includes('promoted')) &&
-        !reasonCode) {
-      signals.push('linkedin');
-      reasonCode = 'linkedin';
-      priority = 2;
-    }
+      // choose reason & priority
+      let reason_code: 'news' | 'site_update' | 'linkedin' | 'stale' = 'stale';
+      let priority = 3;
+      if (news) { reason_code = 'news'; priority = 1; }
+      else if (site_update) { reason_code = 'site_update'; priority = 2; }
+      else if (linkedin) { reason_code = 'linkedin'; priority = 2; }
 
-    // Check for stale contact (P3)
-    const isStale = !customer.last_contacted_at || 
-                    new Date(customer.last_contacted_at) < fourteenDaysAgo;
-    
-    if (isStale && !reasonCode) {
-      signals.push('stale');
-      reasonCode = 'stale';
-      priority = 3;
-    }
-
-    // Skip if no signals
-    if (!reasonCode) continue;
-
-    // Create task
-    tasks.push({
-      customer_id: customer.id,
-      recommended_at: today,
-      reason_code: reasonCode,
-      priority: priority,
-      news_cluster_ids: newsClusterIds,
-      reason: getReasonText(reasonCode, customer),
-      status: 'open'
-    });
-  }
-
-  // Insert tasks
-  if (tasks.length > 0) {
-    const { error: insertError } = await supabase
-      .from('outreach_tasks')
-      .upsert(tasks, { 
-        onConflict: 'customer_id,recommended_at',
-        ignoreDuplicates: false 
+      tasksToUpsert.push({
+        customer_id: c.id,
+        recommended_at: today,
+        status: 'open',
+        reason_code,
+        priority,
+        news_cluster_ids: news ? newsIds : null
       });
+    }
 
-    if (insertError) throw insertError;
+    debugInfo.upsertCount = tasksToUpsert.length;
+    if (debug) console.log('[DEBUG] Tasks to upsert:', debugInfo);
+
+    // 4) Upsert (dedupe per customer/day)
+    for (const t of tasksToUpsert) {
+      const { error: tErr } = await supabase
+        .from('outreach_tasks')
+        .upsert(t, { onConflict: 'customer_id,recommended_at' });
+      
+      if (tErr) {
+        console.error('UPSERT_TASK_FAIL:', tErr.message, t);
+        if (tErr.message.includes('permission denied') || tErr.message.includes('policy')) {
+          return new Response(
+            JSON.stringify({ ok: false, message: 'RLS_DENIED', details: tErr.message }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+      }
+    }
+
+    return new Response(
+      JSON.stringify({ ok: true, inserted: tasksToUpsert.length, debug: debug ? debugInfo : undefined }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('BUILD_TODAY_ERROR:', error);
+    return new Response(
+      JSON.stringify({ 
+        ok: false, 
+        message: 'BUILD_ERROR',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
-
-  console.log(`Built ${tasks.length} outreach tasks for today`);
-
-  return new Response(
-    JSON.stringify({ ok: true, count: tasks.length, tasks }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
 }
 
 async function listToday(supabase: any) {
-  const today = new Date().toISOString().split('T')[0];
+  try {
+    const today = localTodayAU();
 
-  const { data: tasks, error } = await supabase
-    .from('outreach_tasks')
-    .select(`
-      *,
-      customer:customers(*)
-    `)
-    .eq('recommended_at', today)
-    .eq('status', 'open')
-    .order('priority', { ascending: true })
-    .order('created_at', { ascending: false });
+    const { data: tasks, error } = await supabase
+      .from('outreach_tasks')
+      .select(`
+        id, status, reason_code, priority, news_cluster_ids, created_at,
+        customers:customer_id ( id, name, url, url_key, notes, tags, last_contacted_at )
+      `)
+      .eq('recommended_at', today)
+      .eq('status', 'open')
+      .order('priority', { ascending: true });
 
-  if (error) throw error;
+    if (error) {
+      console.error('TASKS_READ_FAIL:', error.message);
+      return new Response(
+        JSON.stringify({ ok: false, message: 'TASKS_READ_FAIL', details: error.message }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
-  // For news tasks, fetch the news details
-  const enrichedTasks = await Promise.all(
-    tasks.map(async (task: any) => {
-      if (task.reason_code === 'news' && task.news_cluster_ids) {
-        const { data: newsItems } = await supabase
-          .from('company_news')
-          .select('*')
-          .in('id', task.news_cluster_ids)
-          .eq('deleted', false)
-          .gte('published_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
-          .order('relevance', { ascending: false });
+    // For news tasks, fetch the news details
+    const enrichedTasks = await Promise.all(
+      (tasks || []).map(async (task: any) => {
+        // Rename the embedded customers object to customer for consistency
+        const customer = task.customers;
+        delete task.customers;
+        task.customer = customer;
 
-        return { ...task, news: newsItems || [] };
-      }
-      return task;
-    })
-  );
+        if (task.reason_code === 'news' && task.news_cluster_ids) {
+          const { data: newsItems } = await supabase
+            .from('company_news')
+            .select('id, title, summary, quote, published_at, sources')
+            .in('id', task.news_cluster_ids)
+            .eq('deleted', false)
+            .gte('published_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+            .order('relevance', { ascending: false });
 
-  return new Response(
-    JSON.stringify({ ok: true, tasks: enrichedTasks }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+          return { ...task, news: newsItems || [] };
+        }
+        return task;
+      })
+    );
+
+    return new Response(
+      JSON.stringify({ ok: true, tasks: enrichedTasks }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('LIST_TODAY_ERROR:', error);
+    return new Response(
+      JSON.stringify({ 
+        ok: false, 
+        message: 'LIST_ERROR',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
 }
 
 async function updateTask(supabase: any, taskId: string, updates: any) {
-  const { status, snooze_until } = updates;
+  try {
+    const { status, snooze_until } = updates;
 
-  const updateData: any = {};
-  if (status) updateData.status = status;
-  if (snooze_until) updateData.snooze_until = snooze_until;
+    const updateData: any = {};
+    if (status) updateData.status = status;
+    if (snooze_until) updateData.snooze_until = snooze_until;
 
-  const { data: task, error } = await supabase
-    .from('outreach_tasks')
-    .update(updateData)
-    .eq('id', taskId)
-    .select('*, customer:customers(*)')
-    .single();
+    const { data: task, error } = await supabase
+      .from('outreach_tasks')
+      .update(updateData)
+      .eq('id', taskId)
+      .select(`
+        id, status, reason_code, priority, news_cluster_ids,
+        customers:customer_id ( id, name, url, url_key, notes, tags, last_contacted_at )
+      `)
+      .single();
 
-  if (error) throw error;
+    if (error) {
+      console.error('UPDATE_TASK_FAIL:', error.message);
+      return new Response(
+        JSON.stringify({ ok: false, message: 'UPDATE_FAIL', details: error.message }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
-  // If marked done, update customer's last_contacted_at
-  if (status === 'done' && task.customer) {
-    await supabase
-      .from('customers')
-      .update({ last_contacted_at: new Date().toISOString() })
-      .eq('id', task.customer.id);
-  }
+    // Rename the embedded customers object to customer for consistency
+    const customer = task.customers;
+    delete task.customers;
+    task.customer = customer;
 
-  return new Response(
-    JSON.stringify({ ok: true, task }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
-}
+    // If marked done, update customer's last_contacted_at
+    if (status === 'done' && task.customer) {
+      await supabase
+        .from('customers')
+        .update({ last_contacted_at: new Date().toISOString() })
+        .eq('id', task.customer.id);
+    }
 
-function getReasonText(reasonCode: string, customer: any): string {
-  switch (reasonCode) {
-    case 'news':
-      return 'Recent company news';
-    case 'site_update':
-      return 'Website recently updated';
-    case 'linkedin':
-      return 'New hiring activity detected';
-    case 'stale':
-      const daysSince = customer.last_contacted_at 
-        ? Math.floor((Date.now() - new Date(customer.last_contacted_at).getTime()) / (1000 * 60 * 60 * 24))
-        : 999;
-      return `No contact for ${daysSince} days`;
-    default:
-      return 'Outreach recommended';
+    return new Response(
+      JSON.stringify({ ok: true, task }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+
+  } catch (error) {
+    console.error('UPDATE_TASK_ERROR:', error);
+    return new Response(
+      JSON.stringify({ 
+        ok: false, 
+        message: 'UPDATE_ERROR',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 }
