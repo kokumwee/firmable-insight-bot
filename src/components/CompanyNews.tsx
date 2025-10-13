@@ -32,23 +32,41 @@ interface CompanyNewsProps {
   url: string;
 }
 
+// Helper to convert URL to canonical key
+const toUrlKey = (input: string): string => {
+  try {
+    const u = new URL(input.trim());
+    return u.hostname.replace(/^www\./, '');
+  } catch {
+    return input.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+  }
+};
+
 export const CompanyNews = ({ url }: CompanyNewsProps) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [items, setItems] = useState<NewsItem[]>([]);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const { toast } = useToast();
+  
+  // Use canonical URL key for all operations
+  const urlKey = toUrlKey(url);
 
-  const fetchNews = async () => {
+  const fetchNews = async (includeDebug = false) => {
     try {
       const { data: response, error } = await supabase.functions.invoke('news', {
-        body: { action: 'list', url }
+        body: { action: 'list', url, debug: includeDebug }
       });
 
       if (error) throw error;
 
       if (response.ok) {
         setItems(response.items || []);
+        
+        // Log debug info if available
+        if (response.debug) {
+          console.log('News debug data:', response.debug);
+        }
       }
     } catch (error) {
       console.error('Error fetching news:', error);

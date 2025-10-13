@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
+import { toUrlKey, resolveCompanyEntity } from "../_shared/urlUtils.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -12,15 +13,18 @@ serve(async (req) => {
   }
 
   try {
-    const { action, url, id } = await req.json();
+    const { action, url, id, debug } = await req.json();
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
+    
+    // Convert URL to canonical key
+    const urlKey = url ? toUrlKey(url) : null;
 
     // ACTION: list
     if (action === 'list') {
-      if (!url) {
+      if (!urlKey) {
         return new Response(
           JSON.stringify({ ok: false, message: "URL is required" }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -28,19 +32,34 @@ serve(async (req) => {
       }
 
       const maxAgeDays = 30;
-      const cutoffDate = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+      const cutoffDateUTC = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
 
       const { data: items, error } = await supabase
         .from('company_news')
         .select('*')
-        .eq('url', url)
+        .eq('url_key', urlKey)
         .eq('deleted', false)
-        .gte('published_at', cutoffDate)
+        .gte('published_at', cutoffDateUTC)
         .order('published_at', { ascending: false })
         .order('relevance', { ascending: false })
         .limit(5);
 
       if (error) throw error;
+
+      // Return debug data if requested
+      if (debug) {
+        const { data: debugItems } = await supabase
+          .from('company_news_debug')
+          .select('*')
+          .eq('url_key', urlKey)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        
+        return new Response(
+          JSON.stringify({ ok: true, items: items || [], debug: debugItems || [] }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
 
       return new Response(
         JSON.stringify({ ok: true, items: items || [] }),
@@ -72,19 +91,39 @@ serve(async (req) => {
 
     // ACTION: refresh
     if (action === 'refresh') {
-      if (!url) {
+      if (!urlKey) {
         return new Response(
           JSON.stringify({ ok: false, message: "URL is required" }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      console.log('Refreshing news for:', url);
+      console.log('Refreshing news for:', url, '-> url_key:', urlKey);
+      
+      // Helper to log debug info
+      const logDebug = async (stage: string, item: any, dropped_reason?: string) => {
+        try {
+          await supabase.from('company_news_debug').insert({
+            url_key: urlKey,
+            stage,
+            title: item.title,
+            link: item.link,
+            publisher: item.publisher,
+            published_at_raw: item.published_at_raw || item.published_at,
+            parsed_ok: !!item.parsed_ok,
+            dropped_reason
+          });
+        } catch (e) {
+          console.error('Debug log error:', e);
+        }
+      };
 
       // Constants
       const NEWS_RECENT_DAYS = 30;
       const NEWS_TARGET_ITEMS = 5;
-      const cutoffDate = new Date(Date.now() - NEWS_RECENT_DAYS * 24 * 60 * 60 * 1000);
+      const cutoffDateUTC = new Date(Date.now() - NEWS_RECENT_DAYS * 24 * 60 * 60 * 1000);
+      
+      console.log('Cutoff date (UTC):', cutoffDateUTC.toISOString());
 
       // Allowed domains
       const ALLOWED_DOMAINS = [
@@ -133,7 +172,7 @@ serve(async (req) => {
       const { data: companyData } = await supabase
         .from('company_cards')
         .select('analysis_json')
-        .eq('url', url)
+        .eq('url_key', urlKey)
         .maybeSingle();
 
       const companyKeywords = companyData?.analysis_json?.keywords_top || [];
@@ -148,9 +187,15 @@ serve(async (req) => {
       // Check for provider keys
       const serpApiKey = Deno.env.get('SERPAPI_KEY');
       const newsApiKey = Deno.env.get('NEWSAPI_KEY');
+      
+      console.log('Provider keys:', { 
+        serpApiKey: !!serpApiKey, 
+        newsApiKey: !!newsApiKey 
+      });
 
       if (!serpApiKey && !newsApiKey) {
         console.log('No news provider keys configured - returning empty');
+        await logDebug('provider_check', { title: 'N/A' }, 'NO_PROVIDER_KEYS');
         return new Response(
           JSON.stringify({ ok: true, items: [] }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -160,15 +205,16 @@ serve(async (req) => {
       // Fetch from providers
       const candidates: any[] = [];
 
-      // Helper to parse dates robustly
-      const parseDate = (dateStr: string): Date | null => {
-        if (!dateStr) return null;
+      // Helper to parse dates robustly to UTC
+      const parseDate = (dateStr: string): { date: Date | null, raw: string } => {
+        const raw = dateStr || '';
+        if (!raw) return { date: null, raw };
         try {
-          const parsed = new Date(dateStr);
-          if (isNaN(parsed.getTime())) return null;
-          return parsed;
+          const parsed = new Date(raw);
+          if (isNaN(parsed.getTime())) return { date: null, raw };
+          return { date: parsed, raw };
         } catch {
-          return null;
+          return { date: null, raw };
         }
       };
 
@@ -182,57 +228,65 @@ serve(async (req) => {
         }
       };
 
-      // SerpAPI
+      // SerpAPI with strict params
       if (serpApiKey) {
         try {
-          const queryFamilies = [
-            `("${entity.brand}" OR "${entity.domain}") AND (launch OR announce OR update OR AI OR agents OR integration OR partnership OR acquisition OR pricing OR hiring)`,
-            `("${entity.brand}" OR "${entity.domain}") AND (product OR feature OR platform OR security OR privacy OR data)`
-          ];
+          const query = `("${entity.brand}" OR "${entity.domain}") (launch OR announce OR update OR AI OR agents OR integration OR partnership OR acquisition OR pricing OR hiring OR product OR feature)`;
+          console.log('SerpAPI query:', query);
 
-          const locales = ['us', 'nl'];
           const searchTypes = [{ tbm: 'nws', label: 'news' }, { tbm: undefined, label: 'web' }];
 
-          for (const q of queryFamilies) {
-            for (const locale of locales) {
-              for (const searchType of searchTypes) {
-                const serpUrl = new URL('https://serpapi.com/search');
-                serpUrl.searchParams.set('q', q);
-                serpUrl.searchParams.set('api_key', serpApiKey);
-                serpUrl.searchParams.set('engine', 'google');
-                serpUrl.searchParams.set('tbs', 'qdr:m'); // last month
-                serpUrl.searchParams.set('gl', locale);
-                serpUrl.searchParams.set('num', '10');
-                if (searchType.tbm) {
-                  serpUrl.searchParams.set('tbm', searchType.tbm);
+          for (const searchType of searchTypes) {
+            const serpUrl = new URL('https://serpapi.com/search');
+            serpUrl.searchParams.set('q', query);
+            serpUrl.searchParams.set('api_key', serpApiKey);
+            serpUrl.searchParams.set('engine', 'google');
+            serpUrl.searchParams.set('tbs', 'qdr:m'); // last month
+            serpUrl.searchParams.set('gl', 'us');
+            serpUrl.searchParams.set('hl', 'en');
+            serpUrl.searchParams.set('num', '10');
+            if (searchType.tbm) {
+              serpUrl.searchParams.set('tbm', searchType.tbm);
+            }
+
+            const resp = await fetch(serpUrl.toString());
+            if (resp.ok) {
+              const data = await resp.json();
+              const results = data.organic_results || data.news_results || [];
+              for (const r of results) {
+                const { date: parsedDate, raw: rawDate } = parseDate(r.date);
+                
+                if (!parsedDate) {
+                  await logDebug('serpapi_parse', r, 'DATE_PARSE_FAIL');
+                  continue;
+                }
+                
+                if (parsedDate < cutoffDateUTC) {
+                  await logDebug('serpapi_filter', r, 'OUT_OF_WINDOW');
+                  continue;
+                }
+                
+                // Filter: must mention entity
+                const snippet = r.snippet || '';
+                if (!mentionsEntity(r.title) && !mentionsEntity(snippet)) {
+                  await logDebug('serpapi_filter', r, 'ENTITY_MISS');
+                  continue;
                 }
 
-                const resp = await fetch(serpUrl.toString());
-                if (resp.ok) {
-                  const data = await resp.json();
-                  const results = data.organic_results || data.news_results || [];
-                  for (const r of results) {
-                    const parsedDate = parseDate(r.date);
-                    if (!parsedDate || parsedDate < cutoffDate) continue;
-                    
-                    // Filter: must mention entity
-                    const snippet = r.snippet || '';
-                    if (!mentionsEntity(r.title) && !mentionsEntity(snippet)) continue;
+                const domain = new URL(r.link).hostname.replace('www.', '');
+                const domainScore = isDomainAllowed(r.link) ? 1.0 : 0.3;
 
-                    const domain = new URL(r.link).hostname.replace('www.', '');
-                    const domainScore = isDomainAllowed(r.link) ? 1.0 : 0.3;
-
-                    candidates.push({
-                      title: r.title,
-                      link: r.link,
-                      publisher: r.source || domain,
-                      snippet,
-                      published_at: parsedDate.toISOString(),
-                      source: searchType.label === 'news' ? 'news' : 'web',
-                      domainScore
-                    });
-                  }
-                }
+                candidates.push({
+                  title: r.title,
+                  link: r.link,
+                  publisher: r.source || domain,
+                  snippet,
+                  published_at: parsedDate.toISOString(),
+                  published_at_raw: rawDate,
+                  source: searchType.label === 'news' ? 'news' : 'web',
+                  domainScore,
+                  parsed_ok: true
+                });
               }
             }
           }
@@ -241,12 +295,15 @@ serve(async (req) => {
         }
       }
 
-      // NewsAPI
+      // NewsAPI with strict params
       if (newsApiKey) {
         try {
-          const fromDate = cutoffDate.toISOString().split('T')[0];
+          const fromDate = cutoffDateUTC.toISOString().split('T')[0];
+          const query = `("${entity.brand}" OR "${entity.domain}") AND (launch OR update OR AI OR integration OR partnership OR acquisition OR pricing OR hiring OR product OR feature)`;
+          console.log('NewsAPI query:', query, 'from:', fromDate);
+          
           const newsUrl = new URL('https://newsapi.org/v2/everything');
-          newsUrl.searchParams.set('q', `("${entity.brand}" OR "${entity.domain}") AND (launch OR update OR AI OR integration OR partnership OR acquisition OR pricing OR hiring)`);
+          newsUrl.searchParams.set('q', query);
           newsUrl.searchParams.set('from', fromDate);
           newsUrl.searchParams.set('sortBy', 'publishedAt');
           newsUrl.searchParams.set('language', 'en');
@@ -260,12 +317,24 @@ serve(async (req) => {
             const data = await resp.json();
             const articles = data.articles || [];
             for (const a of articles) {
-              const parsedDate = parseDate(a.publishedAt);
-              if (!parsedDate || parsedDate < cutoffDate) continue;
+              const { date: parsedDate, raw: rawDate } = parseDate(a.publishedAt);
+              
+              if (!parsedDate) {
+                await logDebug('newsapi_parse', a, 'DATE_PARSE_FAIL');
+                continue;
+              }
+              
+              if (parsedDate < cutoffDateUTC) {
+                await logDebug('newsapi_filter', a, 'OUT_OF_WINDOW');
+                continue;
+              }
               
               // Filter: must mention entity
               const snippet = a.description || '';
-              if (!mentionsEntity(a.title) && !mentionsEntity(snippet)) continue;
+              if (!mentionsEntity(a.title) && !mentionsEntity(snippet)) {
+                await logDebug('newsapi_filter', a, 'ENTITY_MISS');
+                continue;
+              }
 
               const domainScore = isDomainAllowed(a.url) ? 1.0 : 0.3;
 
@@ -275,8 +344,10 @@ serve(async (req) => {
                 publisher: a.source?.name || new URL(a.url).hostname.replace('www.', ''),
                 snippet,
                 published_at: parsedDate.toISOString(),
+                published_at_raw: rawDate,
                 source: 'news',
-                domainScore
+                domainScore,
+                parsed_ok: true
               });
             }
           }
@@ -285,14 +356,19 @@ serve(async (req) => {
         }
       }
 
-      // Filter by recency
+      // Final recency filter (should be redundant but double-check)
       const recentCandidates = candidates.filter(c => {
         const pubDate = new Date(c.published_at);
-        return pubDate >= cutoffDate;
+        const isRecent = pubDate >= cutoffDateUTC;
+        if (!isRecent) {
+          logDebug('final_filter', c, 'OUT_OF_WINDOW');
+        }
+        return isRecent;
       });
 
       if (recentCandidates.length === 0) {
-        console.log('No recent news found');
+        console.log('No recent news found after filtering');
+        await logDebug('final_result', { title: 'N/A' }, 'EMPTY_AFTER_FILTERS');
         return new Response(
           JSON.stringify({ ok: true, items: [] }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -301,24 +377,54 @@ serve(async (req) => {
 
       console.log(`Found ${recentCandidates.length} candidates after filtering`);
 
-      // Cluster similar articles (improved fingerprinting)
+      // Cluster similar articles (Jaccard-based within 7-day window)
       const normalize = (str: string) => {
-        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'by', 'with'];
+        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'by', 'with', 'is', 'are'];
         const words = str.toLowerCase()
           .replace(/[^a-z0-9\s]/g, ' ')
-          .split(/\s+/)
+          .replace(/\s+/g, ' ')
+          .trim()
+          .split(' ')
           .filter(w => w.length > 3 && !stopwords.includes(w));
         // Keep top 8 terms, sorted for stability
         return words.slice(0, 8).sort().join(' ');
       };
+      
+      const jaccard = (a: string, b: string): number => {
+        const setA = new Set(a.split(' '));
+        const setB = new Set(b.split(' '));
+        const intersection = new Set([...setA].filter(x => setB.has(x)));
+        const union = new Set([...setA, ...setB]);
+        return intersection.size / union.size;
+      };
 
-      const clustered = new Map();
-      for (const c of recentCandidates) {
+      // Sort by timestamp for clustering
+      const sortedCandidates = recentCandidates.sort((a, b) => 
+        new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+      );
+      
+      const clustered = new Map<string, any[]>();
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      
+      for (const c of sortedCandidates) {
         const fingerprint = normalize(c.title);
-        if (!clustered.has(fingerprint)) {
-          clustered.set(fingerprint, []);
+        let foundCluster = false;
+        
+        // Try to find existing cluster within 7-day window
+        for (const [existingFingerprint, items] of clustered.entries()) {
+          const firstItem = items[0];
+          const timeDiff = Math.abs(new Date(c.published_at).getTime() - new Date(firstItem.published_at).getTime());
+          
+          if (timeDiff <= sevenDaysMs && jaccard(fingerprint, existingFingerprint) >= 0.85) {
+            items.push(c);
+            foundCluster = true;
+            break;
+          }
         }
-        clustered.get(fingerprint).push(c);
+        
+        if (!foundCluster) {
+          clustered.set(fingerprint, [c]);
+        }
       }
 
       // Build cluster objects
@@ -420,21 +526,46 @@ Rate items with actionable events highly even without "launch" keyword.`;
         }
       }
 
-      // Sort and take top N
-      const topClusters = clusters
+      // Sort and take top N, fallback to unclustered if needed
+      let topClusters = clusters
         .sort((a, b) => b.relevance - a.relevance || new Date(b.published_at).getTime() - new Date(a.published_at).getTime())
         .slice(0, NEWS_TARGET_ITEMS);
+      
+      // Fallback: if clustering yields zero, use top unclustered items
+      if (topClusters.length === 0 && recentCandidates.length > 0) {
+        console.log('No clusters after AI scoring, using top unclustered items');
+        const topUnclustered = recentCandidates
+          .sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime())
+          .slice(0, NEWS_TARGET_ITEMS)
+          .map(c => ({
+            cluster_id: normalize(c.title),
+            title: c.title,
+            summary: c.snippet.substring(0, 200),
+            quote: null,
+            published_at: c.published_at,
+            sources: [{ title: c.title, link: c.link, publisher: c.publisher, published_at: c.published_at }],
+            relevance: 0.5,
+            reason: 'Unclustered fallback',
+            domainScore: c.domainScore
+          }));
+        topClusters = topUnclustered;
+      }
 
       // Mark previous items as deleted
-      await supabase
+      const { error: deleteError } = await supabase
         .from('company_news')
         .update({ deleted: true })
-        .eq('url', url)
+        .eq('url_key', urlKey)
         .eq('deleted', false);
+      
+      if (deleteError) {
+        console.error('Failed to soft-delete previous items:', deleteError);
+      }
 
       // Insert new items
       const itemsToInsert = topClusters.map(c => ({
         url,
+        url_key: urlKey,
         source: 'news',
         title: c.title.substring(0, 200),
         summary: c.summary,

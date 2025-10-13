@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
+import { toUrlKey } from "../_shared/urlUtils.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -20,6 +21,8 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+    
+    const urlKey = toUrlKey(url);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -59,7 +62,7 @@ serve(async (req) => {
     const { data: newsItems } = await supabase
       .from('company_news')
       .select('title, summary, quote, link, published_at, reason, relevance, sources')
-      .eq('url', url)
+      .eq('url_key', urlKey)
       .eq('deleted', false)
       .gte('published_at', cutoffDate)
       .order('relevance', { ascending: false })
