@@ -86,6 +86,14 @@ serve(async (req) => {
       const NEWS_TARGET_ITEMS = 5;
       const cutoffDate = new Date(Date.now() - NEWS_RECENT_DAYS * 24 * 60 * 60 * 1000);
 
+      // Allowed domains
+      const ALLOWED_DOMAINS = [
+        'techcrunch.com', 'theverge.com', 'zdnet.com', 'arstechnica.com',
+        'techzine.eu', 'techradar.com', 'venturebeat.com', 'wired.com',
+        'protocol.com', 'bloomberg.com', 'reuters.com', 'ft.com',
+        'businesswire.com', 'prnewswire.com', 'techcrunch.com'
+      ];
+
       // Get company name from company_cards
       const { data: companyCard } = await supabase
         .from('company_cards')
@@ -126,36 +134,75 @@ serve(async (req) => {
       // Fetch from providers
       const candidates: any[] = [];
 
+      // Helper to parse dates robustly
+      const parseDate = (dateStr: string): Date | null => {
+        if (!dateStr) return null;
+        try {
+          const parsed = new Date(dateStr);
+          if (isNaN(parsed.getTime())) return null;
+          return parsed;
+        } catch {
+          return null;
+        }
+      };
+
+      // Helper to check if domain is allowed
+      const isDomainAllowed = (url: string): boolean => {
+        try {
+          const domain = new URL(url).hostname.replace('www.', '');
+          return ALLOWED_DOMAINS.some(allowed => domain.includes(allowed));
+        } catch {
+          return false;
+        }
+      };
+
       // SerpAPI
       if (serpApiKey) {
         try {
-          const queries = [
-            `"${companyName}" (launch OR announce OR partnership OR funding OR hire)`,
-            `"${companyName}" product`,
-            `"${companyName}" partnership`
+          const queryFamilies = [
+            `"${companyName}" AND (AI OR agents OR data OR platform OR feature OR update OR rollout OR claims OR reveals OR unveils)`,
+            `"${companyName}" AND (launch OR announce OR partnership OR product OR integration)`
           ];
 
-          for (const q of queries) {
-            const serpUrl = new URL('https://serpapi.com/search');
-            serpUrl.searchParams.set('q', q);
-            serpUrl.searchParams.set('api_key', serpApiKey);
-            serpUrl.searchParams.set('engine', 'google');
-            serpUrl.searchParams.set('tbs', 'qdr:m'); // last month
-            serpUrl.searchParams.set('num', '10');
+          const locales = ['us', 'nl'];
+          const searchTypes = [{ tbm: 'nws', label: 'news' }, { tbm: undefined, label: 'web' }];
 
-            const resp = await fetch(serpUrl.toString());
-            if (resp.ok) {
-              const data = await resp.json();
-              const results = data.organic_results || [];
-              for (const r of results) {
-                candidates.push({
-                  title: r.title,
-                  link: r.link,
-                  publisher: r.source || new URL(r.link).hostname,
-                  snippet: r.snippet || '',
-                  published_at: r.date || new Date().toISOString(),
-                  source: 'web'
-                });
+          for (const q of queryFamilies) {
+            for (const locale of locales) {
+              for (const searchType of searchTypes) {
+                const serpUrl = new URL('https://serpapi.com/search');
+                serpUrl.searchParams.set('q', q);
+                serpUrl.searchParams.set('api_key', serpApiKey);
+                serpUrl.searchParams.set('engine', 'google');
+                serpUrl.searchParams.set('tbs', 'qdr:m'); // last month
+                serpUrl.searchParams.set('gl', locale);
+                serpUrl.searchParams.set('num', '10');
+                if (searchType.tbm) {
+                  serpUrl.searchParams.set('tbm', searchType.tbm);
+                }
+
+                const resp = await fetch(serpUrl.toString());
+                if (resp.ok) {
+                  const data = await resp.json();
+                  const results = data.organic_results || data.news_results || [];
+                  for (const r of results) {
+                    const parsedDate = parseDate(r.date);
+                    if (!parsedDate || parsedDate < cutoffDate) continue;
+
+                    const domain = new URL(r.link).hostname.replace('www.', '');
+                    const domainScore = isDomainAllowed(r.link) ? 1.0 : 0.3;
+
+                    candidates.push({
+                      title: r.title,
+                      link: r.link,
+                      publisher: r.source || domain,
+                      snippet: r.snippet || '',
+                      published_at: parsedDate.toISOString(),
+                      source: searchType.label === 'news' ? 'news' : 'web',
+                      domainScore
+                    });
+                  }
+                }
               }
             }
           }
@@ -173,7 +220,7 @@ serve(async (req) => {
           newsUrl.searchParams.set('from', fromDate);
           newsUrl.searchParams.set('sortBy', 'publishedAt');
           newsUrl.searchParams.set('language', 'en');
-          newsUrl.searchParams.set('pageSize', '30');
+          newsUrl.searchParams.set('pageSize', '50');
 
           const resp = await fetch(newsUrl.toString(), {
             headers: { 'X-Api-Key': newsApiKey }
@@ -183,13 +230,19 @@ serve(async (req) => {
             const data = await resp.json();
             const articles = data.articles || [];
             for (const a of articles) {
+              const parsedDate = parseDate(a.publishedAt);
+              if (!parsedDate || parsedDate < cutoffDate) continue;
+
+              const domainScore = isDomainAllowed(a.url) ? 1.0 : 0.3;
+
               candidates.push({
                 title: a.title,
                 link: a.url,
-                publisher: a.source?.name || new URL(a.url).hostname,
+                publisher: a.source?.name || new URL(a.url).hostname.replace('www.', ''),
                 snippet: a.description || '',
-                published_at: a.publishedAt,
-                source: 'news'
+                published_at: parsedDate.toISOString(),
+                source: 'news',
+                domainScore
               });
             }
           }
@@ -212,12 +265,14 @@ serve(async (req) => {
         );
       }
 
+      console.log(`Found ${recentCandidates.length} candidates after filtering`);
+
       // Cluster similar articles
       const normalize = (str: string) => {
-        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'];
+        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for'];
         const words = str.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/)
-          .filter(w => w.length > 2 && !stopwords.includes(w));
-        return words.slice(0, 8).sort().join(' ');
+          .filter(w => w.length > 3 && !stopwords.includes(w));
+        return words.slice(0, 10).sort().join(' ');
       };
 
       const clustered = new Map();
@@ -232,11 +287,13 @@ serve(async (req) => {
       // Build cluster objects
       const clusters: any[] = [];
       for (const [fingerprint, items] of clustered.entries()) {
-        const mostRecent = items.sort((a: any, b: any) => 
+        const sortedItems = items.sort((a: any, b: any) => 
           new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
-        )[0];
+        );
+        const mostRecent = sortedItems[0];
 
-        const sources = items.slice(0, 4).map((it: any) => ({
+        // Keep up to 4 sources
+        const sources = sortedItems.slice(0, 4).map((it: any) => ({
           title: it.title,
           link: it.link,
           publisher: it.publisher,
@@ -246,7 +303,10 @@ serve(async (req) => {
         // Extract quote from snippet
         const snippetText = items.map((it: any) => it.snippet).join(' ');
         const sentences = snippetText.match(/[^.!?]+[.!?]+/g) || [];
-        const quote = sentences[0]?.trim().substring(0, 180) || null;
+        const quote = sentences.find((s: string) => s.length > 40 && s.length < 180)?.trim() || null;
+
+        // Calculate average domain score for cluster
+        const avgDomainScore = items.reduce((sum: number, it: any) => sum + (it.domainScore || 0.5), 0) / items.length;
 
         clusters.push({
           cluster_id: fingerprint,
@@ -254,12 +314,13 @@ serve(async (req) => {
           snippet: items.map((it: any) => it.snippet).join(' ').substring(0, 500),
           published_at: mostRecent.published_at,
           sources,
-          quote
+          quote,
+          domainScore: avgDomainScore
         });
       }
 
       // Score relevance using AI
-      const scoringPrompt = `Score the relevance of these news clusters to my company.
+      const scoringPrompt = `Score the relevance of these news clusters to my company and the target company.
 
 My company:
 ${myCompany ? `Name: ${myCompany.name}
@@ -270,7 +331,7 @@ Keywords: ${myCompany.keywords?.join(', ')}` : 'Unknown'}
 Target company: ${companyName}
 Target keywords: ${companyKeywords.map((k: any) => k.value).join(', ')}
 
-News clusters:
+News clusters (rate based on: AI, agents, data, platform, features, launches, partnerships, integrations, privacy, security, pricing):
 ${clusters.map((c, i) => `[${i}] ${c.title}\n${c.snippet.substring(0, 200)}`).join('\n\n')}
 
 Return JSON array with same indices, each item:
@@ -279,7 +340,9 @@ Return JSON array with same indices, each item:
   "relevance": 0.0-1.0,
   "reason": "Why relevant (max 100 chars)",
   "summary": "Concise 1-2 line summary (max 200 chars)"
-}`;
+}
+
+Rate items mentioning AI, agents, data platforms, integrations, or product updates highly even without explicit "launch" language.`;
 
       const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
         method: 'POST',
@@ -305,10 +368,11 @@ Return JSON array with same indices, each item:
       const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)\s*```/) || aiContent.match(/```\s*([\s\S]*?)\s*```/);
       const scores = JSON.parse(jsonMatch ? jsonMatch[1] : aiContent);
 
-      // Merge scores
+      // Merge scores with domain boost
       for (const score of scores) {
         if (score.index < clusters.length) {
-          clusters[score.index].relevance = score.relevance || 0.5;
+          const domainBoost = clusters[score.index].domainScore || 0.5;
+          clusters[score.index].relevance = Math.min(1.0, (score.relevance || 0.5) * domainBoost);
           clusters[score.index].reason = score.reason || null;
           clusters[score.index].summary = score.summary || clusters[score.index].snippet.substring(0, 200);
         }

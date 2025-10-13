@@ -65,6 +65,19 @@ serve(async (req) => {
       .order('relevance', { ascending: false })
       .limit(3);
 
+    // Mark relevance based on keyword overlap
+    const myKeywords = myCompany?.keywords || [];
+    const vpWords = myCompany?.value_proposition?.toLowerCase().split(/\s+/) || [];
+    const targetKeywords = (companyCard?.analysis_json?.keywords_top || []).map((k: any) => k.value);
+    const allKeywords = [...myKeywords, ...targetKeywords, ...vpWords]
+      .map((k: string) => k.toLowerCase())
+      .filter((k: string) => k.length > 3);
+
+    const relevantNews = (newsItems || []).filter((item: any) => {
+      const text = `${item.title} ${item.summary}`.toLowerCase();
+      return allKeywords.some((kw: string) => text.includes(kw));
+    });
+
     // Prepare context for AI
     const context = {
       my_company: {
@@ -84,7 +97,7 @@ serve(async (req) => {
       },
       brand_tone: insights.outreach_guidance?.recommended_tone || "Professional",
       recommended_words: insights.outreach_guidance?.recommended_words || [],
-      news_context: newsItems || [],
+      news_context: relevantNews,
       user_context: userContext
     };
 
@@ -119,9 +132,9 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 - Weave my_company.keywords naturally only if they fit
 - If my_company fields are null, skip them (don't mention the sender's company)
 
-IMPORTANT: If news_context is provided with recent company news, weave at most one tasteful, factual reference to the most relevant item.
-Cite the event generally (no URLs), and only if it strengthens the appeal.
-Do not reference items older than 30 days or fabricate details beyond the provided summary/quote.
+IMPORTANT: If news_context is provided and contains relevant items, include at most one concise, tasteful reference to the most relevant news item.
+Only reference news items within the last 30 days. Cite the event generally without URLs, and only if it strengthens the message naturally.
+Do not reference news if it doesn't fit or fabricate details beyond the provided summary/quote.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

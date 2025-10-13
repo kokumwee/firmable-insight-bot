@@ -73,6 +73,25 @@ serve(async (req) => {
       .order('relevance', { ascending: false })
       .limit(3);
 
+    // Get my company profile for relevance marking
+    const { data: myCompany } = await supabase
+      .from('my_company_profile')
+      .select('keywords, value_proposition')
+      .maybeSingle();
+
+    // Mark relevance based on keyword overlap
+    const myKeywords = myCompany?.keywords || [];
+    const vpWords = myCompany?.value_proposition?.toLowerCase().split(/\s+/) || [];
+    const targetKeywords = (companyCard?.analysis_json?.keywords_top || []).map((k: any) => k.value);
+    const allKeywords = [...myKeywords, ...targetKeywords, ...vpWords]
+      .map(k => k.toLowerCase())
+      .filter(k => k.length > 3);
+
+    const relevantNews = (newsItems || []).filter((item: any) => {
+      const text = `${item.title} ${item.summary}`.toLowerCase();
+      return allKeywords.some(kw => text.includes(kw));
+    });
+
     // Prepare context for AI
     const context = {
       companyCard: companyCard || {},
@@ -80,7 +99,7 @@ serve(async (req) => {
         page_type: c.page_type,
         text: c.text.substring(0, 500) // Limit chunk size
       })),
-      news_context: newsItems || []
+      news_context: relevantNews
     };
 
     // Call Lovable AI for engagement analysis
