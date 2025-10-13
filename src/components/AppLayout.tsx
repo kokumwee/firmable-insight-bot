@@ -15,7 +15,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const { count: outreachCount, refetch: refetchOutreachCount } = useOutreachCount();
 
   const navItems = [
-    { to: "/analyze", label: "Analyze Companies", icon: Search },
+    { to: "/analyze", label: "Explore", icon: Search },
     { to: "/customers", label: "Existing Customers", icon: Users },
     { to: "/shortlist", label: "My Shortlist", icon: List },
   ];

@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { url, userContext, regenerate, task } = await req.json();
+    const { url, userContext, regenerate, task, source } = await req.json();
 
     if (!url || !userContext) {
       return new Response(
@@ -57,8 +57,27 @@ serve(async (req) => {
         published_at: task.news_published_at,
         why_it_matters: task.news_relevance_reason || null
       }];
+    } else if (source === 'engagement_insights') {
+      // For engagement insights flow, fetch news summary
+      const urlKey = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+      const { data: newsData } = await supabase
+        .from('company_news_summaries')
+        .select('*')
+        .eq('url_key', urlKey)
+        .maybeSingle();
+      
+      if (newsData && newsData.article_count > 0) {
+        newsContext = {
+          why_it_matters: newsData.why_it_matters,
+          top_group: newsData.groups?.[0] ? {
+            label: newsData.groups[0].label,
+            blurb: newsData.groups[0].blurb,
+            why: newsData.groups[0].why_it_matters
+          } : null
+        };
+      }
     } else {
-      // Fall back to recent news
+      // Fall back to recent news for other flows
       const urlKey = url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       const { data: newsItems } = await supabase
@@ -135,7 +154,8 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 
 If news_context is provided and contains a blurb field, weave one concise, factual reference (max one sentence) 
 to that event when relevant to the sender's offering. If news_context includes "why_it_matters", reflect that 
-value connection naturally. Do not include URLs or invent facts.
+value connection naturally. If news_context is an object with "why_it_matters" and "top_group", use that 
+contextual brief to frame your message timing. Do not include URLs or invent facts.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

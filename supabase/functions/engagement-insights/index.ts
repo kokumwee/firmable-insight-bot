@@ -62,14 +62,36 @@ serve(async (req) => {
       );
     }
 
+    // Get news context if available
+    const toUrlKey = (url: string) => url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/.*$/, '');
+    const urlKey = toUrlKey(url);
+    
+    const { data: newsData } = await supabase
+      .from('company_news_summaries')
+      .select('why_it_matters, groups')
+      .eq('url_key', urlKey)
+      .maybeSingle();
+
     // Prepare context for AI
-    const context = {
+    const context: any = {
       companyCard: companyCard || {},
       chunks: chunks.map(c => ({
         page_type: c.page_type,
         text: c.text.substring(0, 500) // Limit chunk size
       }))
     };
+
+    // Add news context if available
+    if (newsData?.why_it_matters) {
+      context.news_context = {
+        why_it_matters: newsData.why_it_matters,
+        top_groups: (newsData.groups || []).slice(0, 2).map((g: any) => ({
+          label: g.label,
+          blurb: g.blurb,
+          why: g.why_it_matters || null
+        }))
+      };
+    }
 
     // Call Lovable AI for engagement analysis
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -108,6 +130,10 @@ Return strict JSON matching this schema:
     "example_message": "Loved your focus on secure global payments — we help fintechs simplify onboarding worldwide."
   }
 }
+
+If 'news_context' exists, reference one concise, factual hook drawn from it in the example_message.
+Prefer the 'why_it_matters' section to connect the company's recent activity to timing or tone.
+Include at most one news-based insight; no URLs.
 
 Tone labels should be from: Professional, Friendly, Playful, Authoritative, Bold, Caring, Innovative, Minimalist, Trustworthy.
 Sentiment score between 0 (very negative) and 1 (very positive).
