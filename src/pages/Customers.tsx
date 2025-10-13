@@ -203,14 +203,23 @@ Audience: ${(item.target_audience_list || []).join(", ")}
     return text.length > length ? text.substring(0, length) + "..." : text;
   };
 
-  const getFaviconUrl = (url: string | null) => {
+  const normalizeUrl = (url: string | null) => {
     if (!url) return null;
     try {
-      const domain = new URL(url).hostname;
-      return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
+      // Add protocol if missing
+      const urlWithProtocol = url.startsWith('http://') || url.startsWith('https://') 
+        ? url 
+        : `https://${url}`;
+      return new URL(urlWithProtocol);
     } catch {
       return null;
     }
+  };
+
+  const getFaviconUrl = (url: string | null) => {
+    const normalized = normalizeUrl(url);
+    if (!normalized) return null;
+    return `https://www.google.com/s2/favicons?domain=${normalized.hostname}&sz=32`;
   };
 
   const renderCard = (item: CustomerItem) => (
@@ -230,12 +239,12 @@ Audience: ${(item.target_audience_list || []).join(", ")}
               <h3 className="font-semibold text-lg truncate">{item.name}</h3>
               {item.url && (
                 <a 
-                  href={item.url} 
+                  href={normalizeUrl(item.url)?.href || item.url} 
                   target="_blank" 
                   rel="noopener noreferrer"
                   className="text-sm text-muted-foreground hover:underline flex items-center gap-1 truncate"
                 >
-                  {new URL(item.url).hostname}
+                  {normalizeUrl(item.url)?.hostname || item.url}
                   <ExternalLink className="h-3 w-3 flex-shrink-0" />
                 </a>
               )}
@@ -438,12 +447,12 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                     <div className="font-medium truncate">{item.name}</div>
                     {item.url && (
                       <a 
-                        href={item.url} 
+                        href={normalizeUrl(item.url)?.href || item.url} 
                         target="_blank" 
                         rel="noopener noreferrer"
                         className="text-xs text-muted-foreground hover:underline truncate block"
                       >
-                        {new URL(item.url).hostname}
+                        {normalizeUrl(item.url)?.hostname || item.url}
                       </a>
                     )}
                   </div>
