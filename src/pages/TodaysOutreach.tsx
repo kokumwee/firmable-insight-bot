@@ -17,9 +17,11 @@ import {
   Loader2
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeader } from "@/components/PageHeader";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDistanceToNow } from "date-fns";
+import { lastContactLabel } from "@/lib/dates";
 
 interface OutreachTask {
   id: string;
@@ -254,10 +256,27 @@ export default function TodaysOutreach() {
   const getReasonLabel = (reasonCode: string) => {
     switch (reasonCode) {
       case 'news': return '📰 News';
-      case 'site_update': return '🧩 Updated Profile';
-      case 'linkedin': return '👤 New Hire';
-      case 'stale': return '⏰ Follow-up Due';
+      case 'site_update': return '🔁 Site updated';
+      case 'linkedin': return '👥 New hire';
+      case 'stale': return '⏰ Follow-up';
       default: return 'Other';
+    }
+  };
+
+  const getReasonText = (task: OutreachTask): string => {
+    switch (task.reason_code) {
+      case 'news':
+        return task.news && task.news.length > 0
+          ? `${task.customer.name} has ${task.news.length} recent news ${task.news.length === 1 ? 'article' : 'articles'}`
+          : `${task.customer.name} has recent news`;
+      case 'site_update':
+        return `${task.customer.name}'s website was recently updated`;
+      case 'linkedin':
+        return `${task.customer.name} has new LinkedIn activity`;
+      case 'stale':
+        return `${task.customer.name} • ${lastContactLabel(task.customer.last_contacted_at)}`;
+      default:
+        return `Reach out to ${task.customer.name}`;
     }
   };
 
@@ -288,39 +307,24 @@ export default function TodaysOutreach() {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="border-b bg-card">
-        <div className="max-w-7xl mx-auto p-6">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h1 className="text-3xl font-bold">Today's Outreach</h1>
-              <p className="text-muted-foreground">Companies you should reach out to today</p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={handleRefresh}
-                disabled={refreshing}
-              >
-                {refreshing ? (
-                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4 mr-2" />
-                )}
-                Refresh Tasks
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/shortlist')}>
-                Shortlist
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/customers')}>
-                Customers
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/')}>
-                Back to Analyze
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        title="Today's Outreach"
+        subtitle="Companies you should reach out to today"
+        actions={
+          <Button
+            variant="outline"
+            onClick={handleRefresh}
+            disabled={refreshing}
+          >
+            {refreshing ? (
+              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Refresh Tasks
+          </Button>
+        }
+      />
 
       <div className="max-w-7xl mx-auto p-6">
         {tasks.length === 0 ? (
@@ -378,7 +382,7 @@ export default function TodaysOutreach() {
                 <CardContent className="space-y-4">
                   {/* Context based on reason */}
                   <div className="bg-muted/50 rounded-lg p-4">
-                    <p className="text-sm font-medium mb-2">{task.reason}</p>
+                    <p className="text-sm font-medium mb-2">{getReasonText(task)}</p>
                     
                     {task.reason_code === 'news' && task.news && task.news.length > 0 && (
                       <div className="space-y-3">
@@ -409,11 +413,6 @@ export default function TodaysOutreach() {
                       </div>
                     )}
 
-                    {task.reason_code === 'stale' && task.customer.last_contacted_at && (
-                      <p className="text-xs text-muted-foreground">
-                        Last contacted: {formatDistanceToNow(new Date(task.customer.last_contacted_at), { addSuffix: true })}
-                      </p>
-                    )}
                   </div>
 
                   {/* Generated message */}
@@ -467,7 +466,7 @@ export default function TodaysOutreach() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => navigate('/', { state: { preloadUrl: task.customer.url, openEngagement: true } })}
+                      onClick={() => navigate('/analyze', { state: { preloadUrl: task.customer.url, openEngagement: true } })}
                     >
                       View Insights
                     </Button>

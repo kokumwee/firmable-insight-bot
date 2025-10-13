@@ -10,6 +10,7 @@ import { ChatSection } from "@/components/ChatSection";
 import { EngagementInsights } from "@/components/EngagementInsights";
 import { MarketNeighbors } from "@/components/MarketNeighbors";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -269,17 +270,15 @@ export default function Analyze() {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-5xl">
-      {/* Page Header */}
-      <div className="mb-8">
-        <h2 className="text-3xl font-bold text-foreground mb-2">Analyze Companies</h2>
-        <p className="text-muted-foreground">
-          Paste a homepage URL to analyze and chat with company data.
-        </p>
-      </div>
+    <div className="min-h-screen bg-background">
+      <PageHeader
+        title="Analyze Companies"
+        subtitle="Paste a homepage URL to analyze and chat with company data."
+      />
+      <div className="max-w-5xl mx-auto px-4 py-8">
 
-      {/* URL Input Section */}
-      <div className="mb-8 space-y-3">
+        {/* URL Input Section */}
+        <div className="mb-8 space-y-3">
         <Label htmlFor="analyze-url" className="text-sm font-medium">Company Website URL</Label>
         <div className="flex gap-2">
           <Input
@@ -300,14 +299,14 @@ export default function Analyze() {
             <Search className="h-4 w-4 mr-2" />
             Analyze
           </Button>
+          </div>
         </div>
-      </div>
 
-      {/* Loading State */}
-      {state === "loading" && <LoadingSteps progress={crawlProgress} />}
+        {/* Loading State */}
+        {state === "loading" && <LoadingSteps progress={crawlProgress} />}
 
-      {/* Error State */}
-      {state === "error" && (
+        {/* Error State */}
+        {state === "error" && (
         <Alert variant="destructive" className="animate-fade-in">
           <AlertDescription>
             <div className="flex items-center justify-between mb-2">
@@ -320,11 +319,11 @@ export default function Analyze() {
               Tip: Some sites block automated reads. Try a different URL or a less JS-heavy page.
             </p>
           </AlertDescription>
-        </Alert>
-      )}
+          </Alert>
+        )}
 
-      {/* Success State */}
-      {state === "success" && companyData && (
+        {/* Success State */}
+        {state === "success" && companyData && (
         <div id="results" className="space-y-6">
           <div className="flex justify-center gap-3 mb-6">
             <Button 
@@ -377,8 +376,9 @@ export default function Analyze() {
             </TabsContent>
           </Tabs>
           <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

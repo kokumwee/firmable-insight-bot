@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Grid, List, ExternalLink, Trash2, Copy, Mail, Eye, CheckCircle, Info } from "lucide-react";
@@ -569,57 +570,46 @@ Audience: ${(item.target_audience_list || []).join(", ")}
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-12">
-        <header className="mb-8">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h1 className="text-4xl font-bold">Existing Customers</h1>
-              <p className="text-muted-foreground mt-2">
-                Manage your customer relationships and engagement history
-              </p>
-            </div>
-          </div>
-
-          <Alert className="mb-6">
-            <Info className="h-4 w-4" />
-            <AlertDescription>
-              Core company data here is read-only. To refresh, re-analyze the company and click 
-              'Add / Update as Customer' from Company Insights or My Shortlist.
-            </AlertDescription>
-          </Alert>
-
-          <div className="flex flex-wrap gap-4 items-center justify-between">
-            <div className="flex gap-2">
-              <Button
-                variant={viewMode === "cards" ? "default" : "outline"}
-                size="sm"
-                onClick={() => handleViewModeChange("cards")}
-              >
-                <Grid className="h-4 w-4 mr-2" />
-                Cards
-              </Button>
-              <Button
-                variant={viewMode === "table" ? "default" : "outline"}
-                size="sm"
-                onClick={() => handleViewModeChange("table")}
-              >
-                <List className="h-4 w-4 mr-2" />
-                Table
-              </Button>
-            </div>
-
+      <PageHeader
+        title="Existing Customers"
+        subtitle="Current customers and engagement history."
+        actions={
+          <>
+            <Alert className="mr-4 py-2 px-3">
+              <Info className="h-4 w-4" />
+              <AlertDescription className="text-xs">
+                Core company data here is read-only. To refresh, re-analyze the company.
+              </AlertDescription>
+            </Alert>
             <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue />
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Sort by" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="created_at_desc">Newest First</SelectItem>
-                <SelectItem value="name_asc">Name (A-Z)</SelectItem>
-                <SelectItem value="last_contacted_desc">Last Contacted</SelectItem>
+                <SelectItem value="name_asc">Name A-Z</SelectItem>
+                <SelectItem value="last_contacted_asc">Stale First</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-        </header>
+            <Button
+              variant={viewMode === "cards" ? "default" : "outline"}
+              size="icon"
+              onClick={() => handleViewModeChange("cards")}
+            >
+              <Grid className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={viewMode === "table" ? "default" : "outline"}
+              size="icon"
+              onClick={() => handleViewModeChange("table")}
+            >
+              <List className="h-4 w-4" />
+            </Button>
+          </>
+        }
+      />
+
+      <div className="max-w-7xl mx-auto p-6">
 
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -639,8 +629,8 @@ Audience: ${(item.target_audience_list || []).join(", ")}
             <p className="text-muted-foreground mb-4">
               No customers yet. Add one from Company Insights or My Shortlist.
             </p>
-            <Button onClick={() => navigate('/')}>
-              Go to Company Insights
+            <Button onClick={() => navigate('/analyze')}>
+              Go to Analyze Companies
             </Button>
           </div>
         ) : viewMode === "cards" ? (

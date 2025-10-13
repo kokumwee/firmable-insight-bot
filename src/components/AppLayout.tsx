@@ -1,11 +1,10 @@
 import { ReactNode } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
-import { Users, List, Search, Calendar } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { NavLink } from "react-router-dom";
+import { Users, List, Search } from "lucide-react";
 import { MyCompanyProfile } from "@/components/MyCompanyProfile";
 import { Separator } from "@/components/ui/separator";
 import { useOutreachCount } from "@/hooks/useOutreachCount";
+import { OutreachWidget } from "@/components/OutreachWidget";
 import { cn } from "@/lib/utils";
 
 interface AppLayoutProps {
@@ -13,8 +12,7 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  const { count: outreachCount } = useOutreachCount();
-  const navigate = useNavigate();
+  const { count: outreachCount, refetch: refetchOutreachCount } = useOutreachCount();
 
   const navItems = [
     { to: "/customers", label: "Existing Customers", icon: Users },
@@ -63,19 +61,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             Firmable Demo – Kokum
           </h1>
           
-          <Button
-            variant="outline"
-            onClick={() => navigate("/outreach")}
-            className="gap-2"
-          >
-            <Calendar className="h-4 w-4" />
-            Today's Outreach
-            {outreachCount > 0 && (
-              <Badge variant="default" className="ml-1">
-                {outreachCount}
-              </Badge>
-            )}
-          </Button>
+          <OutreachWidget count={outreachCount} onCountChange={refetchOutreachCount} />
         </header>
 
         {/* Page Content */}

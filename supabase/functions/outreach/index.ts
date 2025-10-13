@@ -40,7 +40,7 @@ serve(async (req) => {
 });
 
 async function buildToday(supabase: any, force: boolean) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localTodayAU();
   
   // Check if we already built today (unless force)
   if (!force) {
@@ -119,8 +119,8 @@ async function buildToday(supabase: any, force: boolean) {
     }
 
     // Check for stale contact (P3)
-    const isStale = !customer.last_contacted_at || 
-                    new Date(customer.last_contacted_at) < fourteenDaysAgo;
+    const daysSinceContact = daysSince(customer.last_contacted_at);
+    const isStale = daysSinceContact === null || daysSinceContact >= 14;
     
     if (isStale && !reasonCode) {
       signals.push('stale');
@@ -164,7 +164,7 @@ async function buildToday(supabase: any, force: boolean) {
 }
 
 async function listToday(supabase: any) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localTodayAU();
 
   const { data: tasks, error } = await supabase
     .from('outreach_tasks')
@@ -233,6 +233,29 @@ async function updateTask(supabase: any, taskId: string, updates: any) {
   );
 }
 
+function localTodayAU(): string {
+  const now = new Date();
+  const localNow = new Date(now.toLocaleString('en-US', { timeZone: 'Australia/Melbourne' }));
+  return localNow.toISOString().split('T')[0];
+}
+
+function daysSince(dateISO: string | null, tz = 'Australia/Melbourne'): number | null {
+  if (!dateISO) return null;
+  const now = new Date();
+  const localNow = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+  const then = new Date(new Date(dateISO).toLocaleString('en-US', { timeZone: tz }));
+  const ms = +localNow - +then;
+  return ms < 0 ? 0 : Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function lastContactLabel(dateISO: string | null): string {
+  const d = daysSince(dateISO);
+  if (d === null) return 'No contact yet';
+  if (d === 0) return 'Contacted today';
+  if (d === 1) return 'No contact for 1 day';
+  return `No contact for ${d} days`;
+}
+
 function getReasonText(reasonCode: string, customer: any): string {
   switch (reasonCode) {
     case 'news':
@@ -242,10 +265,7 @@ function getReasonText(reasonCode: string, customer: any): string {
     case 'linkedin':
       return 'New hiring activity detected';
     case 'stale':
-      const daysSince = customer.last_contacted_at 
-        ? Math.floor((Date.now() - new Date(customer.last_contacted_at).getTime()) / (1000 * 60 * 60 * 24))
-        : 999;
-      return `No contact for ${daysSince} days`;
+      return lastContactLabel(customer.last_contacted_at);
     default:
       return 'Outreach recommended';
   }
