@@ -9,6 +9,12 @@ verify_jwt = false
 [functions.suggest-unverified]
 verify_jwt = false
 
+[functions.customers]
+verify_jwt = false
+
+[functions.outreach]
+verify_jwt = false
+
 [functions.neighbors]
 verify_jwt = false
 

@@ -136,6 +136,69 @@ export type Database = {
         }
         Relationships: []
       }
+      customers: {
+        Row: {
+          company_size: Json | null
+          created_at: string | null
+          hq_location: Json | null
+          id: string
+          industry: Json | null
+          keywords_top: Json | null
+          last_contacted_at: string | null
+          linkedin_summary: string | null
+          name: string
+          notes: string | null
+          offerings_bulleted: Json | null
+          recently_updated: boolean | null
+          tags: string[] | null
+          target_audience_list: Json | null
+          tone_summary: string | null
+          updated_at: string | null
+          url: string | null
+          usp: Json | null
+        }
+        Insert: {
+          company_size?: Json | null
+          created_at?: string | null
+          hq_location?: Json | null
+          id?: string
+          industry?: Json | null
+          keywords_top?: Json | null
+          last_contacted_at?: string | null
+          linkedin_summary?: string | null
+          name: string
+          notes?: string | null
+          offerings_bulleted?: Json | null
+          recently_updated?: boolean | null
+          tags?: string[] | null
+          target_audience_list?: Json | null
+          tone_summary?: string | null
+          updated_at?: string | null
+          url?: string | null
+          usp?: Json | null
+        }
+        Update: {
+          company_size?: Json | null
+          created_at?: string | null
+          hq_location?: Json | null
+          id?: string
+          industry?: Json | null
+          keywords_top?: Json | null
+          last_contacted_at?: string | null
+          linkedin_summary?: string | null
+          name?: string
+          notes?: string | null
+          offerings_bulleted?: Json | null
+          recently_updated?: boolean | null
+          tags?: string[] | null
+          target_audience_list?: Json | null
+          tone_summary?: string | null
+          updated_at?: string | null
+          url?: string | null
+          usp?: Json | null
+        }
+        Relationships: []
+      }
       engagement_insights: {
         Row: {
           brand_voice: Json | null
@@ -177,6 +240,44 @@ export type Database = {
           url?: string
         }
         Relationships: []
+      }
+      outreach_tasks: {
+        Row: {
+          created_at: string | null
+          customer_id: string
+          id: string
+          reason: string
+          recommended_at: string
+          snooze_until: string | null
+          status: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          customer_id: string
+          id?: string
+          reason: string
+          recommended_at?: string
+          snooze_until?: string | null
+          status?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          customer_id?: string
+          id?: string
+          reason?: string
+          recommended_at?: string
+          snooze_until?: string | null
+          status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "outreach_tasks_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       page_cache: {
         Row: {
