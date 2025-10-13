@@ -54,48 +54,103 @@ Deno.serve(async (req) => {
 });
 
 async function handleAddFromAnalysis(supabase: any, params: { url: string }) {
-  const { url } = params;
+  let { url } = params;
+  
+  // Normalize URL
+  try {
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+    const urlObj = new URL(url);
+    url = urlObj.href;
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ ok: false, code: 'INVALID_URL', error: { message: 'Invalid URL format.' } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
   
   // Load company_cards
   const { data: companyCard, error: cardError } = await supabase
     .from('company_cards')
     .select('*')
     .eq('url', url)
-    .single();
+    .maybeSingle();
 
-  if (cardError || !companyCard) {
+  if (cardError) {
+    console.error('[customers] DB error fetching company_cards:', cardError);
     return new Response(
-      JSON.stringify({ ok: false, error: { message: 'Company analysis not found. Please analyze first.' } }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ ok: false, code: 'DB_ERROR', error: { message: cardError.message, details: cardError } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
-  // Load engagement_insights
+  if (!companyCard) {
+    return new Response(
+      JSON.stringify({ ok: false, code: 'NO_CARD', error: { message: 'Company analysis not found. Please analyze first.' } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Load engagement_insights (optional)
   const { data: engagement } = await supabase
     .from('engagement_insights')
     .select('*')
     .eq('url', url)
     .maybeSingle();
 
+  // Safe fallback: generate name from URL if missing
+  let companyName = companyCard.name;
+  if (!companyName || companyName.trim() === '') {
+    try {
+      const urlObj = new URL(url);
+      companyName = urlObj.hostname.replace('www.', '').split('.')[0];
+      companyName = companyName.charAt(0).toUpperCase() + companyName.slice(1);
+    } catch {
+      companyName = 'Unknown Company';
+    }
+  }
+
   // Extract offerings as bulleted array (match shortlist structure)
-  const offerings = companyCard.offerings?.value 
-    ? (typeof companyCard.offerings.value === 'string' 
-        ? companyCard.offerings.value.split('\n').map((s: string) => s.trim()).filter(Boolean)
-        : companyCard.offerings.value)
-    : [];
+  let offerings: any[] = [];
+  if (companyCard.offerings?.value) {
+    if (Array.isArray(companyCard.offerings.value)) {
+      offerings = companyCard.offerings.value;
+    } else if (typeof companyCard.offerings.value === 'string') {
+      offerings = companyCard.offerings.value.split('\n').map((s: string) => s.trim()).filter(Boolean);
+    }
+  }
 
   // Extract target audience as array (match shortlist structure)
-  const targetAudience = companyCard.target_audience?.value
-    ? (typeof companyCard.target_audience.value === 'string'
-        ? companyCard.target_audience.value.split('\n').map((s: string) => s.trim()).filter(Boolean)
-        : companyCard.target_audience.value)
-    : [];
+  let targetAudience: string[] = [];
+  if (companyCard.target_audience?.value) {
+    if (Array.isArray(companyCard.target_audience.value)) {
+      targetAudience = companyCard.target_audience.value;
+    } else if (typeof companyCard.target_audience.value === 'string') {
+      targetAudience = companyCard.target_audience.value.split('\n').map((s: string) => s.trim()).filter(Boolean);
+    }
+  }
 
-  // Extract top keywords from engagement insights
-  const keywords = engagement?.key_messages?.slice(0, 5).map((msg: any) => ({
-    term: msg.message || msg.term || msg,
-    weight: msg.confidence || msg.weight || 1
-  })) || [];
+  // Extract top keywords from engagement insights (safe handling)
+  let keywords: any[] = [];
+  if (engagement?.key_messages) {
+    if (Array.isArray(engagement.key_messages)) {
+      keywords = engagement.key_messages.slice(0, 5).map((msg: any) => {
+        if (typeof msg === 'string') {
+          return { term: msg, weight: 1 };
+        }
+        return {
+          term: msg.message || msg.term || msg.text || String(msg),
+          weight: msg.confidence || msg.weight || 1
+        };
+      });
+    } else if (engagement.key_messages.keywords && Array.isArray(engagement.key_messages.keywords)) {
+      keywords = engagement.key_messages.keywords.slice(0, 5).map((kw: any) => ({
+        term: typeof kw === 'string' ? kw : (kw.term || kw.text || String(kw)),
+        weight: kw.weight || 1
+      }));
+    }
+  }
 
   // Extract tone summary from engagement insights
   const toneSummary = engagement?.outreach_guidance?.recommended_tone 
@@ -105,29 +160,31 @@ async function handleAddFromAnalysis(supabase: any, params: { url: string }) {
   // Map data to customers table (identical to shortlist structure)
   const customerData = {
     url,
-    name: companyCard.name || "Unknown company",
-    industry: companyCard.industry,
-    company_size: companyCard.company_size,
-    hq_location: companyCard.hq_location,
-    usp: companyCard.usp,
+    name: companyName,
+    industry: companyCard.industry || null,
+    company_size: companyCard.company_size || null,
+    hq_location: companyCard.hq_location || null,
+    usp: companyCard.usp || null,
     offerings_bulleted: offerings,
     target_audience_list: targetAudience,
     tone_summary: toneSummary,
     keywords_top: keywords,
     tags: ['Customer'],
+    updated_at: new Date().toISOString(),
   };
 
   // Upsert
   const { data: customer, error: upsertError } = await supabase
     .from('customers')
-    .upsert(customerData, { onConflict: 'url' })
+    .upsert(customerData, { onConflict: 'url', ignoreDuplicates: false })
     .select()
     .single();
 
   if (upsertError) {
+    console.error('[customers] Upsert error:', upsertError);
     return new Response(
-      JSON.stringify({ ok: false, error: { message: upsertError.message } }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ ok: false, code: 'DB_ERROR', error: { message: upsertError.message, details: upsertError } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
@@ -150,55 +207,91 @@ async function handleAddFromAnalysis(supabase: any, params: { url: string }) {
 
   console.log('[customers] Created/updated from analysis:', url);
   return new Response(
-    JSON.stringify({ ok: true, data: customer, message: 'Customer record created/updated successfully.' }),
+    JSON.stringify({ ok: true, data: customer, message: 'Customer saved successfully.' }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }
 
 async function handleAddFromShortlist(supabase: any, params: { url: string }) {
-  const { url } = params;
+  let { url } = params;
+  
+  // Normalize URL
+  try {
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://' + url;
+    }
+    const urlObj = new URL(url);
+    url = urlObj.href;
+  } catch (e) {
+    return new Response(
+      JSON.stringify({ ok: false, code: 'INVALID_URL', error: { message: 'Invalid URL format.' } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
   
   // Load shortlist row
   const { data: shortlistItem, error: shortlistError } = await supabase
     .from('shortlist')
     .select('*')
     .eq('url', url)
-    .single();
+    .maybeSingle();
 
-  if (shortlistError || !shortlistItem) {
+  if (shortlistError) {
+    console.error('[customers] DB error fetching shortlist:', shortlistError);
     return new Response(
-      JSON.stringify({ ok: false, error: { message: 'Company not found in shortlist.' } }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ ok: false, code: 'DB_ERROR', error: { message: shortlistError.message, details: shortlistError } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
-  // Copy all fields from shortlist (exact structure)
+  if (!shortlistItem) {
+    return new Response(
+      JSON.stringify({ ok: false, code: 'NOT_IN_SHORTLIST', error: { message: 'Company not found in shortlist.' } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Safe fallback: generate name from URL if missing
+  let companyName = shortlistItem.name;
+  if (!companyName || companyName.trim() === '') {
+    try {
+      const urlObj = new URL(url);
+      companyName = urlObj.hostname.replace('www.', '').split('.')[0];
+      companyName = companyName.charAt(0).toUpperCase() + companyName.slice(1);
+    } catch {
+      companyName = 'Unknown Company';
+    }
+  }
+
+  // Copy all fields from shortlist (exact structure) with safe fallbacks
   const customerData = {
     url,
-    name: shortlistItem.name || "Unknown company",
-    industry: shortlistItem.industry,
-    company_size: shortlistItem.company_size,
-    hq_location: shortlistItem.hq_location,
-    usp: shortlistItem.usp,
-    offerings_bulleted: shortlistItem.offerings_bulleted || [],
-    target_audience_list: shortlistItem.target_audience_list || [],
-    tone_summary: shortlistItem.tone_summary,
-    keywords_top: shortlistItem.keywords_top || [],
+    name: companyName,
+    industry: shortlistItem.industry || null,
+    company_size: shortlistItem.company_size || null,
+    hq_location: shortlistItem.hq_location || null,
+    usp: shortlistItem.usp || null,
+    offerings_bulleted: Array.isArray(shortlistItem.offerings_bulleted) ? shortlistItem.offerings_bulleted : [],
+    target_audience_list: Array.isArray(shortlistItem.target_audience_list) ? shortlistItem.target_audience_list : [],
+    tone_summary: shortlistItem.tone_summary || null,
+    keywords_top: Array.isArray(shortlistItem.keywords_top) ? shortlistItem.keywords_top : [],
     tags: ['Customer'],
-    notes: shortlistItem.notes,
+    notes: shortlistItem.notes || null,
+    updated_at: new Date().toISOString(),
   };
 
   // Upsert into customers
   const { data: customer, error: upsertError } = await supabase
     .from('customers')
-    .upsert(customerData, { onConflict: 'url' })
+    .upsert(customerData, { onConflict: 'url', ignoreDuplicates: false })
     .select()
     .single();
 
   if (upsertError) {
+    console.error('[customers] Upsert error:', upsertError);
     return new Response(
-      JSON.stringify({ ok: false, error: { message: upsertError.message } }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ ok: false, code: 'DB_ERROR', error: { message: upsertError.message, details: upsertError } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
@@ -215,7 +308,7 @@ async function handleAddFromShortlist(supabase: any, params: { url: string }) {
 
   console.log('[customers] Moved from shortlist to customers:', url);
   return new Response(
-    JSON.stringify({ ok: true, data: customer, message: 'Moved to Existing Customers.' }),
+    JSON.stringify({ ok: true, moved: true, data: customer, message: 'Moved to Existing Customers.' }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }

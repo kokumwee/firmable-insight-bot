@@ -55,6 +55,7 @@ export default function Shortlist() {
   const [editingTags, setEditingTags] = useState<string>("");
   const [editingNotes, setEditingNotes] = useState<string>("");
   const [reanalyzingUrl, setReanalyzingUrl] = useState<string | null>(null);
+  const [addingToCustomersUrl, setAddingToCustomersUrl] = useState<string | null>(null);
   const [itemToRemove, setItemToRemove] = useState<ShortlistItem | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -174,7 +175,12 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
   };
 
   const handleAddToCustomers = async (item: ShortlistItem) => {
+    setAddingToCustomersUrl(item.url);
     try {
+      // Optimistic UI update: remove from list immediately
+      const urlToMove = item.url;
+      setItems(prevItems => prevItems.filter(i => i.url !== urlToMove));
+      
       const { data, error } = await supabase.functions.invoke('customers', {
         body: {
           action: 'add_from_shortlist',
@@ -182,12 +188,23 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
         }
       });
 
-      if (error) throw error;
-      if (!data.ok) throw new Error(data.error?.message);
+      if (error) {
+        console.error('Edge function error:', error);
+        // Rollback on error
+        await loadItems();
+        throw new Error('Failed to move to customers');
+      }
+      
+      if (!data.ok) {
+        console.error('Server response error:', data);
+        // Rollback on error
+        await loadItems();
+        throw new Error(data.error?.message || 'Failed to move to customers');
+      }
 
       toast({
-        title: "Saved to Customers!",
-        description: "Customer added successfully",
+        title: "Moved to Customers!",
+        description: data.message || "Company moved successfully",
       });
     } catch (error) {
       console.error('Error adding to customers:', error);
@@ -196,6 +213,8 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
         description: error instanceof Error ? error.message : "Failed to add to customers",
         variant: "destructive",
       });
+    } finally {
+      setAddingToCustomersUrl(null);
     }
   };
 
@@ -494,8 +513,13 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
                                 e.stopPropagation();
                                 handleAddToCustomers(item);
                               }}
+                              disabled={addingToCustomersUrl === item.url}
                             >
-                              <Users className="h-4 w-4" />
+                              {addingToCustomersUrl === item.url ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Users className="h-4 w-4" />
+                              )}
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>Add / Update as Customer</TooltipContent>
@@ -756,8 +780,13 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => handleAddToCustomers(item)}
+                                disabled={addingToCustomersUrl === item.url}
                               >
-                                <Users className="h-4 w-4" />
+                                {addingToCustomersUrl === item.url ? (
+                                  <RefreshCw className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Users className="h-4 w-4" />
+                                )}
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Add / Update as Customer</TooltipContent>

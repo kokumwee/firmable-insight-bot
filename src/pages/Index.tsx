@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, Bookmark, List, Users } from "lucide-react";
+import { Search, Bookmark, List, Users, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -241,12 +241,19 @@ const Index = () => {
         }
       });
 
-      if (error) throw error;
-      if (!data.ok) throw new Error(data.error?.message);
+      if (error) {
+        console.error('Edge function error:', error);
+        throw new Error('Failed to save to customers');
+      }
+      
+      if (!data.ok) {
+        console.error('Server response error:', data);
+        throw new Error(data.error?.message || 'Failed to save to customers');
+      }
 
       toast({
         title: "Saved to Customers!",
-        description: "Customer added successfully",
+        description: data.message || "Customer added successfully",
       });
     } catch (error) {
       console.error('Error saving to customers:', error);
@@ -347,8 +354,17 @@ const Index = () => {
                 variant="secondary"
                 className="gap-2"
               >
-                <Users className="h-5 w-5" />
-                {savingToCustomers ? "Saving..." : "Add / Update as Customer"}
+                {savingToCustomers ? (
+                  <>
+                    <RefreshCw className="h-5 w-5 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Users className="h-5 w-5" />
+                    Add / Update as Customer
+                  </>
+                )}
               </Button>
             </div>
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full max-w-4xl mx-auto">
