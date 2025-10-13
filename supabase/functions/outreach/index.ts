@@ -67,48 +67,98 @@ async function buildToday(supabase: any, force: boolean) {
 
   if (customersError) throw customersError;
 
+  // Fetch my company profile for relevance scoring
+  const { data: myCompany } = await supabase
+    .from('my_company_profile')
+    .select('*')
+    .limit(1)
+    .maybeSingle();
+
   const tasks = [];
   const now = new Date();
   const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
   for (const customer of customers) {
     const signals = [];
     let reasonCode = null;
     let priority = 3;
-    let newsClusterIds = null;
+    let newsData = null;
 
-    // Check for recent news (P1 - highest priority)
+    // Extract url_key
     const urlKey = customer.url 
       ? customer.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]
       : null;
     
     if (!urlKey) continue; // Skip customers without valid URL
 
-    const { data: news } = await supabase
-      .from('company_news')
-      .select('id, relevance')
+    // === P1: Check for News-based signal (highest priority) ===
+    const { data: summary } = await supabase
+      .from('company_news_summaries')
+      .select('url_key, company_name, summary, groups, generated_at, article_count')
       .eq('url_key', urlKey)
-      .eq('deleted', false)
-      .gte('published_at', thirtyDaysAgo.toISOString())
-      .order('relevance', { ascending: false })
-      .limit(2);
+      .maybeSingle();
 
-    if (news && news.length > 0) {
-      signals.push('news');
-      reasonCode = 'news';
-      priority = 1;
-      newsClusterIds = news.map((n: any) => n.id);
+    if (summary && summary.article_count > 0) {
+      const fresh = new Date(summary.generated_at) > twentyFourHoursAgo;
+      const groups = summary.groups || [];
+      const actionable = groups.filter((g: any) =>
+        g.label && g.label.match(/AI|agent|integration|launch|update|partnership|hiring|funding/i)
+      );
+
+      if (fresh && actionable.length > 0) {
+        // Check for news cooldown (7 days)
+        const { data: recentNews } = await supabase
+          .from('outreach_tasks')
+          .select('id')
+          .eq('customer_id', customer.id)
+          .eq('reason_code', 'news')
+          .gte('recommended_at', sevenDaysAgo.toISOString());
+
+        if (!recentNews || recentNews.length === 0) {
+          // Calculate relevance score
+          const top = actionable[0];
+          const topBlurb = top.blurb || '';
+          
+          // Simple keyword matching with my company profile
+          let keywordScore = 0;
+          if (myCompany && myCompany.keywords && Array.isArray(myCompany.keywords)) {
+            const keywords = myCompany.keywords.map((k: string) => k.toLowerCase());
+            const blurbLower = topBlurb.toLowerCase();
+            const matches = keywords.filter((kw: string) => blurbLower.includes(kw));
+            keywordScore = matches.length > 0 ? 0.3 : 0;
+          }
+
+          const score = (fresh ? 0.4 : 0) + (actionable.length > 0 ? 0.3 : 0) + keywordScore;
+
+          if (score >= 0.6) {
+            const groupHash = simpleHash(top.label + topBlurb);
+            signals.push('news');
+            reasonCode = 'news';
+            priority = 1;
+            
+            newsData = {
+              news_group_labels: [top.label],
+              news_group_hashes: [groupHash],
+              news_blurb_snippet: topBlurb.slice(0, 300),
+              news_sources_short: (top.items || []).map((i: any) => i.publisher).slice(0, 3),
+              news_published_at: new Date(top.items?.[0]?.published_at || summary.generated_at).toISOString()
+            };
+          }
+        }
+      }
     }
 
-    // Check for site update (P2)
+    // === P2: Check for site update (if no news) ===
     if (customer.recently_updated && !reasonCode) {
       signals.push('site_update');
       reasonCode = 'site_update';
       priority = 2;
     }
 
-    // Check for LinkedIn signals (P2)
+    // === P2: Check for LinkedIn signals (if no news or site update) ===
     if (customer.linkedin_summary && 
         (customer.linkedin_summary.toLowerCase().includes('new hire') || 
          customer.linkedin_summary.toLowerCase().includes('promoted')) &&
@@ -118,7 +168,7 @@ async function buildToday(supabase: any, force: boolean) {
       priority = 2;
     }
 
-    // Check for stale contact (P3)
+    // === P3: Check for stale contact (lowest priority) ===
     const daysSinceContact = daysSince(customer.last_contacted_at);
     const isStale = daysSinceContact === null || daysSinceContact >= 14;
     
@@ -132,15 +182,21 @@ async function buildToday(supabase: any, force: boolean) {
     if (!reasonCode) continue;
 
     // Create task
-    tasks.push({
+    const taskData: any = {
       customer_id: customer.id,
       recommended_at: today,
       reason_code: reasonCode,
       priority: priority,
-      news_cluster_ids: newsClusterIds,
       reason: getReasonText(reasonCode, customer),
       status: 'open'
-    });
+    };
+
+    // Add news-specific data if this is a news task
+    if (newsData) {
+      Object.assign(taskData, newsData);
+    }
+
+    tasks.push(taskData);
   }
 
   // Insert tasks
@@ -269,4 +325,14 @@ function getReasonText(reasonCode: string, customer: any): string {
     default:
       return 'Outreach recommended';
   }
+}
+
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return hash.toString(36);
 }

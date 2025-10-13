@@ -411,7 +411,12 @@ export type Database = {
           created_at: string | null
           customer_id: string
           id: string
+          news_blurb_snippet: string | null
           news_cluster_ids: string[] | null
+          news_group_hashes: string[] | null
+          news_group_labels: string[] | null
+          news_published_at: string | null
+          news_sources_short: string[] | null
           priority: number | null
           reason: string
           reason_code: string | null
@@ -423,7 +428,12 @@ export type Database = {
           created_at?: string | null
           customer_id: string
           id?: string
+          news_blurb_snippet?: string | null
           news_cluster_ids?: string[] | null
+          news_group_hashes?: string[] | null
+          news_group_labels?: string[] | null
+          news_published_at?: string | null
+          news_sources_short?: string[] | null
           priority?: number | null
           reason: string
           reason_code?: string | null
@@ -435,7 +445,12 @@ export type Database = {
           created_at?: string | null
           customer_id?: string
           id?: string
+          news_blurb_snippet?: string | null
           news_cluster_ids?: string[] | null
+          news_group_hashes?: string[] | null
+          news_group_labels?: string[] | null
+          news_published_at?: string | null
+          news_sources_short?: string[] | null
           priority?: number | null
           reason?: string
           reason_code?: string | null

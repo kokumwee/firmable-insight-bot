@@ -25,6 +25,11 @@ interface OutreachTask {
   priority: number;
   status: string;
   news_cluster_ids?: string[];
+  news_group_labels?: string[];
+  news_group_hashes?: string[];
+  news_blurb_snippet?: string;
+  news_sources_short?: string[];
+  news_published_at?: string;
   customer: {
     id: string;
     name: string;
@@ -110,15 +115,30 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
   const handleGenerateMessage = async (task: OutreachTask) => {
     setGeneratingMessage(task.id);
     try {
-      const userContext = task.reason_code === 'news' && task.news?.[0]
-        ? `I saw your recent news about "${task.news[0].title}"`
-        : `I wanted to reach out regarding ${task.customer.name}`;
+      let userContext = '';
+      
+      // Use news-specific context if available
+      if (task.reason_code === 'news' && task.news_blurb_snippet) {
+        const newsLabel = task.news_group_labels?.[0] || 'recent news';
+        userContext = `I saw your recent ${newsLabel.toLowerCase()}`;
+      } else if (task.reason_code === 'news' && task.news?.[0]) {
+        userContext = `I saw your recent news about "${task.news[0].title}"`;
+      } else {
+        userContext = `I wanted to reach out regarding ${task.customer.name}`;
+      }
 
       const { data, error } = await supabase.functions.invoke('generate-outreach-message', {
         body: {
           url: task.customer.url,
           userContext,
-          regenerate: !!generatedMessages[task.id]
+          regenerate: !!generatedMessages[task.id],
+          task: {
+            reason_code: task.reason_code,
+            news_blurb_snippet: task.news_blurb_snippet,
+            news_group_labels: task.news_group_labels,
+            news_sources_short: task.news_sources_short,
+            news_published_at: task.news_published_at
+          }
         }
       });
 
@@ -190,7 +210,7 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
 
   const getReasonChip = (reasonCode: string) => {
     switch (reasonCode) {
-      case 'news': return { emoji: '📰', label: 'News', variant: 'destructive' as const };
+      case 'news': return { emoji: '🔴', label: 'News', variant: 'destructive' as const };
       case 'site_update': return { emoji: '🔁', label: 'Site updated', variant: 'default' as const };
       case 'linkedin': return { emoji: '👥', label: 'New hire', variant: 'default' as const };
       case 'stale': return { emoji: '⏰', label: 'Follow-up', variant: 'secondary' as const };
@@ -199,8 +219,16 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
   };
 
   const getContextLine = (task: OutreachTask) => {
-    if (task.reason_code === 'news' && task.news?.[0]) {
-      return task.news[0].title;
+    if (task.reason_code === 'news') {
+      if (task.news_blurb_snippet) {
+        const label = task.news_group_labels?.[0] || 'Recent news';
+        const snippet = task.news_blurb_snippet.slice(0, 80);
+        return `${label} — ${snippet}...`;
+      }
+      if (task.news?.[0]) {
+        return task.news[0].title;
+      }
+      return 'Recent company news';
     }
     if (task.reason_code === 'site_update') {
       return 'Website updated';
