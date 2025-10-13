@@ -54,7 +54,8 @@ serve(async (req) => {
         label: task.news_group_labels?.[0],
         blurb: task.news_blurb_snippet,
         sources: task.news_sources_short,
-        published_at: task.news_published_at
+        published_at: task.news_published_at,
+        why_it_matters: task.news_relevance_reason || null
       }];
     } else {
       // Fall back to recent news
@@ -133,7 +134,8 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 - If my_company fields are null, skip them (don't mention the sender's company)
 
 If news_context is provided and contains a blurb field, weave one concise, factual reference (max one sentence) 
-to that event when relevant to the sender's offering. Do not include URLs or invent facts.
+to that event when relevant to the sender's offering. If news_context includes "why_it_matters", reflect that 
+value connection naturally. Do not include URLs or invent facts.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

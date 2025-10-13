@@ -124,17 +124,40 @@ async function buildToday(supabase: any, force: boolean) {
           
           // Simple keyword matching with my company profile
           let keywordScore = 0;
+          let matchedKeywords: string[] = [];
           if (myCompany && myCompany.keywords && Array.isArray(myCompany.keywords)) {
             const keywords = myCompany.keywords.map((k: string) => k.toLowerCase());
             const blurbLower = topBlurb.toLowerCase();
-            const matches = keywords.filter((kw: string) => blurbLower.includes(kw));
-            keywordScore = matches.length > 0 ? 0.3 : 0;
+            matchedKeywords = keywords.filter((kw: string) => blurbLower.includes(kw));
+            keywordScore = matchedKeywords.length > 0 ? 0.3 : 0;
           }
 
           const score = (fresh ? 0.4 : 0) + (actionable.length > 0 ? 0.3 : 0) + keywordScore;
 
           if (score >= 0.6) {
             const groupHash = simpleHash(top.label + topBlurb);
+            
+            // Generate news_relevance_reason
+            let relevanceReason = '';
+            if (top.why_it_matters) {
+              // Use the group's why_it_matters if available
+              relevanceReason = top.why_it_matters;
+            } else if (matchedKeywords.length > 0 && myCompany) {
+              // Generate based on keyword match
+              relevanceReason = `Relevant to us because we help with ${matchedKeywords[0]}; timing aligns with our ${myCompany.value_proposition ? 'offering' : 'capabilities'}.`;
+            } else if (myCompany && myCompany.value_proposition) {
+              // Generic fallback with value prop
+              relevanceReason = `Timing aligns with our ${myCompany.value_proposition.slice(0, 60)} offering.`;
+            } else {
+              // Safe generic fallback
+              relevanceReason = `Possible interest area; explore fit with our value.`;
+            }
+            
+            // Truncate to 140 chars
+            if (relevanceReason.length > 140) {
+              relevanceReason = relevanceReason.slice(0, 137) + '...';
+            }
+            
             signals.push('news');
             reasonCode = 'news';
             priority = 1;
@@ -144,7 +167,8 @@ async function buildToday(supabase: any, force: boolean) {
               news_group_hashes: [groupHash],
               news_blurb_snippet: topBlurb.slice(0, 300),
               news_sources_short: (top.items || []).map((i: any) => i.publisher).slice(0, 3),
-              news_published_at: new Date(top.items?.[0]?.published_at || summary.generated_at).toISOString()
+              news_published_at: new Date(top.items?.[0]?.published_at || summary.generated_at).toISOString(),
+              news_relevance_reason: relevanceReason
             };
           }
         }

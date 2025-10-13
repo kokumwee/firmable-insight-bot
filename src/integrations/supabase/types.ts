@@ -241,6 +241,7 @@ export type Database = {
           sources: string[] | null
           summary: string | null
           url_key: string
+          why_it_matters: string | null
         }
         Insert: {
           article_count?: number | null
@@ -250,6 +251,7 @@ export type Database = {
           sources?: string[] | null
           summary?: string | null
           url_key: string
+          why_it_matters?: string | null
         }
         Update: {
           article_count?: number | null
@@ -259,6 +261,7 @@ export type Database = {
           sources?: string[] | null
           summary?: string | null
           url_key?: string
+          why_it_matters?: string | null
         }
         Relationships: []
       }
@@ -416,6 +419,7 @@ export type Database = {
           news_group_hashes: string[] | null
           news_group_labels: string[] | null
           news_published_at: string | null
+          news_relevance_reason: string | null
           news_sources_short: string[] | null
           priority: number | null
           reason: string
@@ -433,6 +437,7 @@ export type Database = {
           news_group_hashes?: string[] | null
           news_group_labels?: string[] | null
           news_published_at?: string | null
+          news_relevance_reason?: string | null
           news_sources_short?: string[] | null
           priority?: number | null
           reason: string
@@ -450,6 +455,7 @@ export type Database = {
           news_group_hashes?: string[] | null
           news_group_labels?: string[] | null
           news_published_at?: string | null
+          news_relevance_reason?: string | null
           news_sources_short?: string[] | null
           priority?: number | null
           reason?: string

@@ -47,6 +47,29 @@ interface CustomerItem {
   updated_at: string;
 }
 
+interface NewsGroup {
+  label: string;
+  blurb: string;
+  why_it_matters?: string;
+  items: Array<{
+    title: string;
+    publisher: string;
+    published_at: string;
+    link?: string;
+  }>;
+}
+
+interface NewsSummary {
+  url_key: string;
+  company_name: string;
+  summary: string;
+  why_it_matters?: string;
+  groups: NewsGroup[];
+  sources: string[];
+  article_count: number;
+  generated_at: string;
+}
+
 interface OutreachTask {
   id: string;
   customer_id: string;
@@ -61,6 +84,7 @@ interface OutreachTask {
   news_blurb_snippet?: string;
   news_sources_short?: string[];
   news_published_at?: string;
+  news_relevance_reason?: string;
   customer: {
     id: string;
     name: string;
@@ -366,7 +390,8 @@ export default function Customers() {
             news_blurb_snippet: task.news_blurb_snippet,
             news_group_labels: task.news_group_labels,
             news_sources_short: task.news_sources_short,
-            news_published_at: task.news_published_at
+            news_published_at: task.news_published_at,
+            news_relevance_reason: task.news_relevance_reason
           }
         }
       });
@@ -635,9 +660,13 @@ Audience: ${(item.target_audience_list || []).join(", ")}
 
   const getReasonText = (task: OutreachTask): string => {
     if (task.reason_code === 'news') {
+      if (task.news_relevance_reason) {
+        const label = task.news_group_labels?.[0] || 'News';
+        return `${label} — ${task.news_relevance_reason}`;
+      }
       if (task.news_blurb_snippet) {
         const label = task.news_group_labels?.[0] || 'Recent news';
-        const snippet = task.news_blurb_snippet.slice(0, 80);
+        const snippet = task.news_blurb_snippet.slice(0, 100);
         return `${label} — ${snippet}...`;
       }
       if (task.news && task.news.length > 0) {
@@ -1175,7 +1204,15 @@ Audience: ${(item.target_audience_list || []).join(", ")}
 
                       <CardContent className="space-y-4">
                         <div className="bg-muted/50 rounded-lg p-4">
-                          <p className="text-sm font-medium mb-2">{getReasonText(task)}</p>
+                          <p className="text-sm leading-relaxed line-clamp-2">{getReasonText(task)}</p>
+                          {task.reason_code === 'news' && task.customer?.url && (
+                            <button
+                              onClick={() => handleSwitchTab('news')}
+                              className="text-xs text-primary hover:underline mt-2"
+                            >
+                              View sources →
+                            </button>
+                          )}
                           
                           {task.reason_code === 'news' && task.news && task.news.length > 0 && (
                             <div className="space-y-3">
@@ -1398,6 +1435,13 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                               <p className="text-sm leading-relaxed">{summary.summary}</p>
                             </div>
                             
+                            {summary.why_it_matters && (
+                              <div className="mt-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                                <p className="text-xs font-semibold text-primary mb-1">Why this matters to you</p>
+                                <p className="text-sm text-foreground">{summary.why_it_matters}</p>
+                              </div>
+                            )}
+                            
                             {summary.groups && summary.groups.length > 0 && (
                               <Collapsible>
                                 <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium hover:underline">
@@ -1409,6 +1453,11 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                                     <div key={idx} className="border-l-2 border-primary pl-4">
                                       <h4 className="font-medium text-sm mb-1">{group.label}</h4>
                                       <p className="text-sm text-muted-foreground mb-2">{group.blurb}</p>
+                                      {group.why_it_matters && (
+                                        <p className="text-xs text-muted-foreground/80 italic mb-2">
+                                          Why it matters: {group.why_it_matters}
+                                        </p>
+                                      )}
                                       <div className="text-xs text-muted-foreground">
                                         Sources:{' '}
                                         {group.items.slice(0, 3).map((item: any, i: number) => (

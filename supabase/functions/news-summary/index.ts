@@ -216,16 +216,28 @@ function news_cluster(items: NewsItem[]): NewsCluster[] {
 
 interface SummaryResult {
   summary: string;
-  groups: Array<{ label: string; blurb: string; items: Array<{ title: string; publisher: string; published_at: string }> }>;
+  why_it_matters: string | null;
+  groups: Array<{ label: string; blurb: string; why_it_matters: string | null; items: Array<{ title: string; publisher: string; published_at: string }> }>;
   sources: string[];
   article_count: number;
 }
 
-async function news_summarize_groups(entity: CompanyEntity, clusters: NewsCluster[]): Promise<SummaryResult> {
+async function news_summarize_groups(supabase: any, entity: CompanyEntity, clusters: NewsCluster[]): Promise<SummaryResult> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) {
     throw new Error("LOVABLE_API_KEY not configured");
   }
+
+  // Fetch my company profile for relevance context
+  const { data: myCompany } = await supabase
+    .from('my_company_profile')
+    .select('*')
+    .limit(1)
+    .maybeSingle();
+
+  const myCompanyContext = myCompany
+    ? `\n\nVIEWER CONTEXT (for why_it_matters only):\nCompany: ${myCompany.name || 'Our company'}\nValue proposition: ${myCompany.value_proposition || 'N/A'}\nKeywords: ${(myCompany.keywords || []).join(', ') || 'N/A'}\nTarget audience: ${myCompany.target_audience || 'N/A'}`
+    : null;
 
   const prompt = `You are analyzing news coverage for ${entity.brand} (${entity.url_key}).
 
@@ -236,18 +248,31 @@ Group ${idx + 1}: ${cluster.label}
 Headlines:
 ${cluster.items.slice(0, 3).map(item => `- ${item.title} (${item.publisher})`).join("\n")}
 Representative snippet: ${cluster.representativeSnippet}
-`).join("\n\n")}
+`).join("\n\n")}${myCompanyContext || ''}
 
-Please provide:
+Task:
 1. For each group, write a 1-2 sentence blurb summarizing ONLY what's in the provided titles/snippets (no external knowledge).
-2. A combined company-level digest of 4-6 sentences that flows naturally through the themes, neutral tone, no hype, no URLs.
-3. End with one line: "Why it matters: [angle]" if clear from the coverage.
+2. ${myCompanyContext ? 'For each group, write a brief "why_it_matters" (1 sentence, max 140 chars) explaining why this news might be relevant to the viewer based on their value proposition/keywords. Focus on actionable angles.' : 'Set "why_it_matters" to null for all groups.'}
+3. Write a combined company-level digest of 4-6 sentences that flows naturally through the themes, neutral tone, no hype, no URLs.
+4. ${myCompanyContext ? 'Write an overall "why_it_matters" (1-2 sentences, max 200 chars) explaining how this news creates opportunities for the viewer.' : 'Set overall "why_it_matters" to null.'}
+
+Rules:
+- Use only the information in the headlines above
+- Be factual and neutral in blurbs
+- For why_it_matters: be specific about timing or relevance angles
+- No speculation or external knowledge
+- No URLs
 
 Format as JSON:
 {
-  "summary": "Combined 4-6 sentence digest with why it matters",
+  "summary": "Combined 4-6 sentence digest",
+  "why_it_matters": ${myCompanyContext ? '"Overall relevance explanation..."' : 'null'},
   "groups": [
-    {"label": "Group label", "blurb": "1-2 sentence summary"}
+    {
+      "label": "Group label",
+      "blurb": "1-2 sentence summary",
+      "why_it_matters": ${myCompanyContext ? '"Brief relevance (max 140 chars)"' : 'null'}
+    }
   ]
 }`;
 
@@ -261,7 +286,7 @@ Format as JSON:
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
-          { role: "system", content: "You are a concise news analyst. Only use information from provided headlines/snippets." },
+          { role: "system", content: "You are a concise news analyst. Only use information from provided headlines/snippets. Generate relevance explanations when context is provided." },
           { role: "user", content: prompt },
         ],
       }),
@@ -280,9 +305,11 @@ Format as JSON:
 
     return {
       summary: result.summary || "",
+      why_it_matters: result.why_it_matters || null,
       groups: result.groups.map((g: any, idx: number) => ({
         label: g.label || clusters[idx].label,
         blurb: g.blurb || "",
+        why_it_matters: g.why_it_matters || null,
         items: clusters[idx].items,
       })),
       sources,
@@ -293,9 +320,11 @@ Format as JSON:
     // Fallback
     return {
       summary: `Recent coverage of ${entity.brand} spans ${clusters.length} themes.`,
+      why_it_matters: null,
       groups: clusters.map(c => ({
         label: c.label,
         blurb: c.representativeSnippet.substring(0, 150),
+        why_it_matters: null,
         items: c.items,
       })),
       sources: [...new Set(clusters.flatMap(c => c.items.map(i => i.publisher)))],
@@ -367,12 +396,13 @@ async function news_build_summary(supabase: any, url_key: string, force = false)
     return { ok: true, data: emptyData };
   }
 
-  const digest = await news_summarize_groups(entity, clusters);
+  const digest = await news_summarize_groups(supabase, entity, clusters);
 
   const summaryData = {
     url_key,
     company_name: entity.brand,
     summary: digest.summary,
+    why_it_matters: digest.why_it_matters,
     groups: digest.groups,
     sources: digest.sources,
     article_count: digest.article_count,

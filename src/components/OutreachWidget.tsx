@@ -30,6 +30,7 @@ interface OutreachTask {
   news_blurb_snippet?: string;
   news_sources_short?: string[];
   news_published_at?: string;
+  news_relevance_reason?: string;
   customer: {
     id: string;
     name: string;
@@ -137,7 +138,8 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
             news_blurb_snippet: task.news_blurb_snippet,
             news_group_labels: task.news_group_labels,
             news_sources_short: task.news_sources_short,
-            news_published_at: task.news_published_at
+            news_published_at: task.news_published_at,
+            news_relevance_reason: task.news_relevance_reason
           }
         }
       });
@@ -220,6 +222,10 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
 
   const getContextLine = (task: OutreachTask) => {
     if (task.reason_code === 'news') {
+      if (task.news_relevance_reason) {
+        const label = task.news_group_labels?.[0] || 'News';
+        return `${label} — ${task.news_relevance_reason}`;
+      }
       if (task.news_blurb_snippet) {
         const label = task.news_group_labels?.[0] || 'Recent news';
         const snippet = task.news_blurb_snippet.slice(0, 80);
@@ -252,7 +258,7 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[420px] p-0" align="end" sideOffset={8}>
+      <PopoverContent className="w-[480px] p-0" align="end" sideOffset={8}>
         <div className="p-4 border-b">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-semibold">Today's Outreach</h3>
@@ -281,10 +287,21 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
                 const chip = getReasonChip(task.reason_code);
                 return (
                   <div key={task.id} className="p-4 hover:bg-muted/50 transition-colors">
-                    <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-start justify-between gap-2 mb-3">
                       <div className="flex-1 min-w-0">
-                        <h4 className="font-medium text-sm truncate">{task.customer.name}</h4>
-                        <p className="text-xs text-muted-foreground truncate">{getContextLine(task)}</p>
+                        <h4 className="font-medium text-sm mb-1">{task.customer.name}</h4>
+                        <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{getContextLine(task)}</p>
+                        {task.reason_code === 'news' && (
+                          <button
+                            onClick={() => {
+                              setOpen(false);
+                              navigate(`/customers?tab=news&company=${encodeURIComponent(task.customer.url)}`);
+                            }}
+                            className="text-xs text-primary hover:underline mt-1"
+                          >
+                            View sources →
+                          </button>
+                        )}
                       </div>
                       <Badge variant={chip.variant} className="text-xs shrink-0">
                         {chip.emoji} {chip.label}
