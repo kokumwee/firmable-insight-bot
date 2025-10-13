@@ -62,14 +62,14 @@ serve(async (req) => {
       );
     }
 
-    // Get recent news (last 60 days) for context
-    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    // Get recent news (last 30 days only) for context
+    const cutoffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const { data: newsItems } = await supabase
       .from('company_news')
       .select('title, summary, quote, reason, relevance')
       .eq('url', url)
       .eq('deleted', false)
-      .gte('published_at', sixtyDaysAgo)
+      .gte('published_at', cutoffDate)
       .order('relevance', { ascending: false })
       .limit(3);
 

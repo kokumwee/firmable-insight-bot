@@ -8,6 +8,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDistanceToNow } from "date-fns";
 
+interface NewsSource {
+  title: string;
+  link: string;
+  publisher: string;
+  published_at: string;
+}
+
 interface NewsItem {
   id: string;
   source: string;
@@ -18,6 +25,7 @@ interface NewsItem {
   published_at: string;
   relevance: number;
   reason: string | null;
+  sources?: NewsSource[];
 }
 
 interface CompanyNewsProps {
@@ -83,9 +91,10 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
   };
 
   const handleDelete = async (id: string) => {
-    // Optimistic update
     const previousItems = [...items];
-    setItems(items.filter(item => item.id !== id));
+    
+    // Optimistic update
+    setItems(prev => prev.filter(item => item.id !== id));
 
     try {
       const { data: response, error } = await supabase.functions.invoke('news', {
@@ -93,31 +102,14 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
       });
 
       if (error) throw error;
-
-      if (!response.ok) {
-        throw new Error(response.message || "Failed to delete");
-      }
+      if (!response?.ok) throw new Error(response?.message || "Failed to delete");
 
       toast({
         title: "Removed",
         description: "News item deleted",
-        action: (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={async () => {
-              // Undo: restore the item
-              setItems(previousItems);
-              toast({ title: "Restored" });
-            }}
-          >
-            Undo
-          </Button>
-        ),
       });
     } catch (error) {
       console.error('Error deleting news:', error);
-      // Revert on error
       setItems(previousItems);
       toast({
         title: "Delete failed",
@@ -196,16 +188,7 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
       <CardContent className="space-y-4">
         {items.length === 0 ? (
           <div className="text-center py-6 text-sm text-muted-foreground">
-            <p>Live news not configured — showing AI guesses when available.</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="mt-4"
-            >
-              Generate News
-            </Button>
+            <p>No news in the last 30 days.</p>
           </div>
         ) : (
           items.map((item) => (
@@ -224,8 +207,11 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => handleDelete(item.id)}
-                  className="h-8 w-8 p-0"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(item.id);
+                  }}
+                  className="h-8 w-8 p-0 shrink-0"
                 >
                   <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
                 </Button>
@@ -248,6 +234,27 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
                 <blockquote className="border-l-2 border-primary/20 pl-3 py-1 text-sm italic text-muted-foreground bg-muted/30 rounded-r">
                   "{item.quote}"
                 </blockquote>
+              )}
+
+              {/* Sources */}
+              {item.sources && item.sources.length > 1 && (
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-medium">Also reported by:</span>{' '}
+                  {item.sources.slice(1, 4).map((src, idx) => (
+                    <span key={idx}>
+                      <a
+                        href={src.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {src.publisher}
+                      </a>
+                      {idx < Math.min(item.sources!.length - 2, 2) && ', '}
+                    </span>
+                  ))}
+                </div>
               )}
 
               {/* Reason */}

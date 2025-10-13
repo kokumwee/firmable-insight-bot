@@ -27,11 +27,15 @@ serve(async (req) => {
         );
       }
 
+      const maxAgeDays = 30;
+      const cutoffDate = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
       const { data: items, error } = await supabase
         .from('company_news')
         .select('*')
         .eq('url', url)
         .eq('deleted', false)
+        .gte('published_at', cutoffDate)
         .order('published_at', { ascending: false })
         .order('relevance', { ascending: false })
         .limit(5);
@@ -77,12 +81,17 @@ serve(async (req) => {
 
       console.log('Refreshing news for:', url);
 
+      // Constants
+      const NEWS_RECENT_DAYS = 30;
+      const NEWS_TARGET_ITEMS = 5;
+      const cutoffDate = new Date(Date.now() - NEWS_RECENT_DAYS * 24 * 60 * 60 * 1000);
+
       // Get company name from company_cards
       const { data: companyCard } = await supabase
         .from('company_cards')
         .select('name, url')
         .eq('url', url)
-        .single();
+        .maybeSingle();
 
       const companyName = companyCard?.name || new URL(url).hostname.replace('www.', '').split('.')[0];
       console.log('Company name:', companyName);
@@ -91,47 +100,188 @@ serve(async (req) => {
       const { data: myCompany } = await supabase
         .from('my_company_profile')
         .select('*')
-        .single();
+        .maybeSingle();
 
-      // Get homepage chunks for context
-      const { data: chunks } = await supabase
-        .from('chunks')
-        .select('text')
+      // Get company keywords for relevance
+      const { data: companyData } = await supabase
+        .from('company_cards')
+        .select('analysis_json')
         .eq('url', url)
-        .eq('page_type', 'homepage')
-        .limit(3);
+        .maybeSingle();
 
-      const homepage_text = chunks?.map(c => c.text.substring(0, 300)).join('\n') || '';
+      const companyKeywords = companyData?.analysis_json?.keywords_top || [];
 
-      // Generate AI news guesses (fallback method when no external APIs configured)
-      const aiPrompt = `Generate 3-5 plausible recent company news items for "${companyName}" (${url}).
-      
-Homepage context:
-${homepage_text}
+      // Check for provider keys
+      const serpApiKey = Deno.env.get('SERPAPI_KEY');
+      const newsApiKey = Deno.env.get('NEWSAPI_KEY');
 
-${myCompany ? `My company context (for relevance):
-Name: ${myCompany.name || 'Unknown'}
-Industry: ${myCompany.industry || 'Unknown'}
-Value Proposition: ${myCompany.value_proposition || 'Unknown'}
-Keywords: ${myCompany.keywords?.join(', ') || 'None'}` : ''}
+      if (!serpApiKey && !newsApiKey) {
+        console.log('No news provider keys configured - returning empty');
+        return new Response(
+          JSON.stringify({ ok: true, items: [] }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
 
-Return strict JSON array of news items. Each item MUST have:
+      // Fetch from providers
+      const candidates: any[] = [];
+
+      // SerpAPI
+      if (serpApiKey) {
+        try {
+          const queries = [
+            `"${companyName}" (launch OR announce OR partnership OR funding OR hire)`,
+            `"${companyName}" product`,
+            `"${companyName}" partnership`
+          ];
+
+          for (const q of queries) {
+            const serpUrl = new URL('https://serpapi.com/search');
+            serpUrl.searchParams.set('q', q);
+            serpUrl.searchParams.set('api_key', serpApiKey);
+            serpUrl.searchParams.set('engine', 'google');
+            serpUrl.searchParams.set('tbs', 'qdr:m'); // last month
+            serpUrl.searchParams.set('num', '10');
+
+            const resp = await fetch(serpUrl.toString());
+            if (resp.ok) {
+              const data = await resp.json();
+              const results = data.organic_results || [];
+              for (const r of results) {
+                candidates.push({
+                  title: r.title,
+                  link: r.link,
+                  publisher: r.source || new URL(r.link).hostname,
+                  snippet: r.snippet || '',
+                  published_at: r.date || new Date().toISOString(),
+                  source: 'web'
+                });
+              }
+            }
+          }
+        } catch (e) {
+          console.error('SerpAPI error:', e);
+        }
+      }
+
+      // NewsAPI
+      if (newsApiKey) {
+        try {
+          const fromDate = cutoffDate.toISOString().split('T')[0];
+          const newsUrl = new URL('https://newsapi.org/v2/everything');
+          newsUrl.searchParams.set('q', companyName);
+          newsUrl.searchParams.set('from', fromDate);
+          newsUrl.searchParams.set('sortBy', 'publishedAt');
+          newsUrl.searchParams.set('language', 'en');
+          newsUrl.searchParams.set('pageSize', '30');
+
+          const resp = await fetch(newsUrl.toString(), {
+            headers: { 'X-Api-Key': newsApiKey }
+          });
+
+          if (resp.ok) {
+            const data = await resp.json();
+            const articles = data.articles || [];
+            for (const a of articles) {
+              candidates.push({
+                title: a.title,
+                link: a.url,
+                publisher: a.source?.name || new URL(a.url).hostname,
+                snippet: a.description || '',
+                published_at: a.publishedAt,
+                source: 'news'
+              });
+            }
+          }
+        } catch (e) {
+          console.error('NewsAPI error:', e);
+        }
+      }
+
+      // Filter by recency
+      const recentCandidates = candidates.filter(c => {
+        const pubDate = new Date(c.published_at);
+        return pubDate >= cutoffDate;
+      });
+
+      if (recentCandidates.length === 0) {
+        console.log('No recent news found');
+        return new Response(
+          JSON.stringify({ ok: true, items: [] }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Cluster similar articles
+      const normalize = (str: string) => {
+        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'];
+        const words = str.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/)
+          .filter(w => w.length > 2 && !stopwords.includes(w));
+        return words.slice(0, 8).sort().join(' ');
+      };
+
+      const clustered = new Map();
+      for (const c of recentCandidates) {
+        const fingerprint = normalize(c.title);
+        if (!clustered.has(fingerprint)) {
+          clustered.set(fingerprint, []);
+        }
+        clustered.get(fingerprint).push(c);
+      }
+
+      // Build cluster objects
+      const clusters: any[] = [];
+      for (const [fingerprint, items] of clustered.entries()) {
+        const mostRecent = items.sort((a: any, b: any) => 
+          new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+        )[0];
+
+        const sources = items.slice(0, 4).map((it: any) => ({
+          title: it.title,
+          link: it.link,
+          publisher: it.publisher,
+          published_at: it.published_at
+        }));
+
+        // Extract quote from snippet
+        const snippetText = items.map((it: any) => it.snippet).join(' ');
+        const sentences = snippetText.match(/[^.!?]+[.!?]+/g) || [];
+        const quote = sentences[0]?.trim().substring(0, 180) || null;
+
+        clusters.push({
+          cluster_id: fingerprint,
+          title: mostRecent.title,
+          snippet: items.map((it: any) => it.snippet).join(' ').substring(0, 500),
+          published_at: mostRecent.published_at,
+          sources,
+          quote
+        });
+      }
+
+      // Score relevance using AI
+      const scoringPrompt = `Score the relevance of these news clusters to my company.
+
+My company:
+${myCompany ? `Name: ${myCompany.name}
+Industry: ${myCompany.industry}
+Value Proposition: ${myCompany.value_proposition}
+Keywords: ${myCompany.keywords?.join(', ')}` : 'Unknown'}
+
+Target company: ${companyName}
+Target keywords: ${companyKeywords.map((k: any) => k.value).join(', ')}
+
+News clusters:
+${clusters.map((c, i) => `[${i}] ${c.title}\n${c.snippet.substring(0, 200)}`).join('\n\n')}
+
+Return JSON array with same indices, each item:
 {
-  "source": "ai_guess",
-  "title": "Brief headline (max 80 chars)",
-  "summary": "1-2 sentence summary (max 200 chars)",
-  "quote": "A brief verbatim quote or key phrase (max 180 chars)",
-  "link": "${url}",
-  "published_at": "ISO date within last 60 days",
-  "relevance": 0.0-1.0 (how relevant to my company/industry),
-  "reason": "Why this is relevant (max 100 chars)"
-}
+  "index": <number>,
+  "relevance": 0.0-1.0,
+  "reason": "Why relevant (max 100 chars)",
+  "summary": "Concise 1-2 line summary (max 200 chars)"
+}`;
 
-Make items realistic based on the company's actual business. Higher relevance scores for items that align with my company context.
-Do not invent fake people or quotes - use general statements.`;
-
-      console.log('Calling AI for news generation...');
-      const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${lovableApiKey}`,
@@ -140,51 +290,34 @@ Do not invent fake people or quotes - use general statements.`;
         body: JSON.stringify({
           model: 'google/gemini-2.5-flash',
           messages: [
-            { role: 'system', content: 'You are a news analyst. Always return valid JSON arrays only.' },
-            { role: 'user', content: aiPrompt }
+            { role: 'system', content: 'You are a news analyst. Return only valid JSON.' },
+            { role: 'user', content: scoringPrompt }
           ],
-          temperature: 0.7,
         }),
       });
 
-      if (!aiResponse.ok) {
-        const errorText = await aiResponse.text();
-        console.error('AI API error:', errorText);
-        return new Response(
-          JSON.stringify({ ok: false, message: "AI analysis failed" }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      if (!aiResp.ok) {
+        throw new Error('AI scoring failed');
       }
 
-      const aiData = await aiResponse.json();
-      const aiContent = aiData.choices?.[0]?.message?.content;
+      const aiData = await aiResp.json();
+      const aiContent = aiData.choices?.[0]?.message?.content || '[]';
+      const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)\s*```/) || aiContent.match(/```\s*([\s\S]*?)\s*```/);
+      const scores = JSON.parse(jsonMatch ? jsonMatch[1] : aiContent);
 
-      if (!aiContent) {
-        return new Response(
-          JSON.stringify({ ok: false, message: "No AI response" }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      // Parse AI response
-      let newsItems;
-      try {
-        const jsonMatch = aiContent.match(/```json\s*([\s\S]*?)\s*```/) || aiContent.match(/```\s*([\s\S]*?)\s*```/);
-        const jsonStr = jsonMatch ? jsonMatch[1] : aiContent;
-        newsItems = JSON.parse(jsonStr);
-        
-        if (!Array.isArray(newsItems)) {
-          throw new Error('Expected array of news items');
+      // Merge scores
+      for (const score of scores) {
+        if (score.index < clusters.length) {
+          clusters[score.index].relevance = score.relevance || 0.5;
+          clusters[score.index].reason = score.reason || null;
+          clusters[score.index].summary = score.summary || clusters[score.index].snippet.substring(0, 200);
         }
-      } catch (parseError) {
-        console.error('Failed to parse AI response:', aiContent);
-        return new Response(
-          JSON.stringify({ ok: false, message: "Failed to parse AI response" }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
       }
 
-      console.log(`Generated ${newsItems.length} news items`);
+      // Sort and take top N
+      const topClusters = clusters
+        .sort((a, b) => b.relevance - a.relevance || new Date(b.published_at).getTime() - new Date(a.published_at).getTime())
+        .slice(0, NEWS_TARGET_ITEMS);
 
       // Mark previous items as deleted
       await supabase
@@ -193,17 +326,19 @@ Do not invent fake people or quotes - use general statements.`;
         .eq('url', url)
         .eq('deleted', false);
 
-      // Insert top 5 items
-      const itemsToInsert = newsItems.slice(0, 5).map((item: any) => ({
+      // Insert new items
+      const itemsToInsert = topClusters.map(c => ({
         url,
-        source: item.source || 'ai_guess',
-        title: item.title?.substring(0, 200) || 'Untitled',
-        summary: item.summary?.substring(0, 500) || '',
-        quote: item.quote?.substring(0, 180) || null,
-        link: item.link || url,
-        published_at: item.published_at || new Date().toISOString(),
-        relevance: Math.max(0, Math.min(1, item.relevance || 0.5)),
-        reason: item.reason?.substring(0, 200) || null,
+        source: 'news',
+        title: c.title.substring(0, 200),
+        summary: c.summary,
+        quote: c.quote,
+        link: c.sources[0].link,
+        published_at: c.published_at,
+        relevance: Math.max(0, Math.min(1, c.relevance)),
+        reason: c.reason?.substring(0, 200) || null,
+        cluster_id: c.cluster_id,
+        sources: c.sources,
         deleted: false,
       }));
 
@@ -216,7 +351,7 @@ Do not invent fake people or quotes - use general statements.`;
         throw insertError;
       }
 
-      console.log('News refresh complete');
+      console.log(`Inserted ${itemsToInsert.length} news clusters`);
       return new Response(
         JSON.stringify({ ok: true, items: itemsToInsert }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

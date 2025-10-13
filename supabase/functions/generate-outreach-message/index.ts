@@ -54,14 +54,14 @@ serve(async (req) => {
       .eq('url', url)
       .single();
 
-    // Fetch recent news (last 60 days)
-    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    // Fetch recent news (last 30 days only)
+    const cutoffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const { data: newsItems } = await supabase
       .from('company_news')
-      .select('title, summary, quote, link, published_at, reason, relevance')
+      .select('title, summary, quote, link, published_at, reason, relevance, sources')
       .eq('url', url)
       .eq('deleted', false)
-      .gte('published_at', sixtyDaysAgo)
+      .gte('published_at', cutoffDate)
       .order('relevance', { ascending: false })
       .limit(3);
 
@@ -119,9 +119,9 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 - Weave my_company.keywords naturally only if they fit
 - If my_company fields are null, skip them (don't mention the sender's company)
 
-IMPORTANT: If news_context is provided with recent company news, weave at most one concise reference to the most relevant item.
-Reference it respectfully (no hype), and only if it strengthens the appeal.
-Do not fabricate details beyond the provided summary/quote.
+IMPORTANT: If news_context is provided with recent company news, weave at most one tasteful, factual reference to the most relevant item.
+Cite the event generally (no URLs), and only if it strengthens the appeal.
+Do not reference items older than 30 days or fabricate details beyond the provided summary/quote.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

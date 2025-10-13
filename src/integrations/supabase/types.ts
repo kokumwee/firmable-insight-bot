@@ -138,6 +138,7 @@ export type Database = {
       }
       company_news: {
         Row: {
+          cluster_id: string | null
           created_at: string | null
           deleted: boolean | null
           id: string
@@ -147,11 +148,13 @@ export type Database = {
           reason: string | null
           relevance: number
           source: string
+          sources: Json | null
           summary: string
           title: string
           url: string
         }
         Insert: {
+          cluster_id?: string | null
           created_at?: string | null
           deleted?: boolean | null
           id?: string
@@ -161,11 +164,13 @@ export type Database = {
           reason?: string | null
           relevance?: number
           source: string
+          sources?: Json | null
           summary: string
           title: string
           url: string
         }
         Update: {
+          cluster_id?: string | null
           created_at?: string | null
           deleted?: boolean | null
           id?: string
@@ -175,6 +180,7 @@ export type Database = {
           reason?: string | null
           relevance?: number
           source?: string
+          sources?: Json | null
           summary?: string
           title?: string
           url?: string
