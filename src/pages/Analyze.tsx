@@ -14,7 +14,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useExploreData } from "@/hooks/useExploreData";
+import { useExploreStore } from "@/stores/useExploreStore";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -66,12 +66,8 @@ export default function Analyze() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Orchestrate data fetching for Explore (News + Neighbors)
-  const exploreData = useExploreData(
-    state === 'success' && companyData ? companyData.url : undefined,
-    companyData,
-    engagementData
-  );
+  // Use Explore store for News + Neighbors
+  const { runAnalyze: runExploreAnalyze, newsStatus, news, newsError, neighborsStatus, neighbors, neighborsError, refreshNews, refreshNeighbors } = useExploreStore();
 
   // Handle preload from navigation state
   useEffect(() => {
@@ -142,8 +138,12 @@ export default function Analyze() {
         return;
       }
 
-      setCompanyData(data.data as CompanyData);
+      const companyCardData = data.data as CompanyData;
+      setCompanyData(companyCardData);
       setState("success");
+      
+      // Trigger explore data fetch (news + neighbors) in parallel
+      runExploreAnalyze(targetUrl, companyCardData, engagementData);
       
       toast({
         title: "Analysis Complete",
@@ -375,10 +375,10 @@ export default function Analyze() {
             <TabsContent value="engagement">
               <EngagementInsights 
                 url={companyData.url}
-                newsData={exploreData.news.data}
-                newsLoading={exploreData.news.status === 'loading'}
-                newsError={exploreData.news.error}
-                onRefreshNews={exploreData.refresh.news}
+                newsData={news}
+                newsLoading={newsStatus === 'loading'}
+                newsError={newsError}
+                onRefreshNews={refreshNews}
               />
             </TabsContent>
             <TabsContent value="neighbors">
@@ -386,11 +386,11 @@ export default function Analyze() {
                 currentUrl={companyData.url} 
                 companyCard={companyData}
                 engagement={engagementData}
-                verifiedNeighbors={exploreData.neighbors.data?.verified || []}
-                aiNeighbors={exploreData.neighbors.data?.ai || []}
-                loadingVerified={exploreData.neighbors.status === 'loading'}
-                loadingAI={exploreData.neighbors.status === 'loading'}
-                onRefreshNeighbors={exploreData.refresh.neighbors}
+                verifiedNeighbors={neighbors?.verified || []}
+                aiNeighbors={neighbors?.ai || []}
+                loadingVerified={neighborsStatus === 'loading'}
+                loadingAI={neighborsStatus === 'loading'}
+                onRefreshNeighbors={() => refreshNeighbors(companyData, engagementData)}
               />
             </TabsContent>
           </Tabs>
