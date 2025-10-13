@@ -1207,7 +1207,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                           <p className="text-sm leading-relaxed line-clamp-2">{getReasonText(task)}</p>
                           {task.reason_code === 'news' && task.customer?.url && (
                             <button
-                              onClick={() => handleSwitchTab('news')}
+                              onClick={() => navigate('/customers?tab=news')}
                               className="text-xs text-primary hover:underline mt-2"
                             >
                               View sources →
