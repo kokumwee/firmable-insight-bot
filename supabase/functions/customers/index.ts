@@ -65,30 +65,56 @@ async function handleAddFromAnalysis(supabase: any, params: { url: string }) {
 
   if (cardError || !companyCard) {
     return new Response(
-      JSON.stringify({ ok: false, error: { message: 'Analyze this company first.' } }),
+      JSON.stringify({ ok: false, error: { message: 'Company analysis not found. Please analyze first.' } }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
-  // Load engagement_insights (optional)
+  // Load engagement_insights
   const { data: engagement } = await supabase
     .from('engagement_insights')
     .select('*')
     .eq('url', url)
     .maybeSingle();
 
-  // Map data to customers table
+  // Extract offerings as bulleted array (match shortlist structure)
+  const offerings = companyCard.offerings?.value 
+    ? (typeof companyCard.offerings.value === 'string' 
+        ? companyCard.offerings.value.split('\n').map((s: string) => s.trim()).filter(Boolean)
+        : companyCard.offerings.value)
+    : [];
+
+  // Extract target audience as array (match shortlist structure)
+  const targetAudience = companyCard.target_audience?.value
+    ? (typeof companyCard.target_audience.value === 'string'
+        ? companyCard.target_audience.value.split('\n').map((s: string) => s.trim()).filter(Boolean)
+        : companyCard.target_audience.value)
+    : [];
+
+  // Extract top keywords from engagement insights
+  const keywords = engagement?.key_messages?.slice(0, 5).map((msg: any) => ({
+    term: msg.message || msg.term || msg,
+    weight: msg.confidence || msg.weight || 1
+  })) || [];
+
+  // Extract tone summary from engagement insights
+  const toneSummary = engagement?.outreach_guidance?.recommended_tone 
+    || engagement?.brand_voice?.value
+    || null;
+
+  // Map data to customers table (identical to shortlist structure)
   const customerData = {
     url,
-    name: companyCard.name || url,
+    name: companyCard.name || "Unknown company",
     industry: companyCard.industry,
     company_size: companyCard.company_size,
     hq_location: companyCard.hq_location,
     usp: companyCard.usp,
-    offerings_bulleted: companyCard.offerings,
-    target_audience_list: companyCard.target_audience?.value?.split('\n').map((s: string) => s.trim()).filter(Boolean) || [],
-    tone_summary: engagement?.brand_voice?.value || null,
-    keywords_top: engagement?.key_messages || [],
+    offerings_bulleted: offerings,
+    target_audience_list: targetAudience,
+    tone_summary: toneSummary,
+    keywords_top: keywords,
+    tags: ['Customer'],
   };
 
   // Upsert
@@ -122,8 +148,9 @@ async function handleAddFromAnalysis(supabase: any, params: { url: string }) {
     }
   }
 
+  console.log('[customers] Created/updated from analysis:', url);
   return new Response(
-    JSON.stringify({ ok: true, data: customer }),
+    JSON.stringify({ ok: true, data: customer, message: 'Customer record created/updated successfully.' }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }
@@ -140,32 +167,28 @@ async function handleAddFromShortlist(supabase: any, params: { url: string }) {
 
   if (shortlistError || !shortlistItem) {
     return new Response(
-      JSON.stringify({ ok: false, error: { message: 'Item not found in shortlist.' } }),
+      JSON.stringify({ ok: false, error: { message: 'Company not found in shortlist.' } }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 
-  // Prefer company_cards if available
-  const { data: companyCard } = await supabase
-    .from('company_cards')
-    .select('*')
-    .eq('url', url)
-    .maybeSingle();
-
+  // Copy all fields from shortlist (exact structure)
   const customerData = {
     url,
-    name: (companyCard?.name || shortlistItem.name) || url,
-    industry: companyCard?.industry || shortlistItem.industry,
-    company_size: companyCard?.company_size || shortlistItem.company_size,
-    hq_location: companyCard?.hq_location || shortlistItem.hq_location,
-    usp: companyCard?.usp || shortlistItem.usp,
-    offerings_bulleted: companyCard?.offerings || shortlistItem.offerings_bulleted,
+    name: shortlistItem.name || "Unknown company",
+    industry: shortlistItem.industry,
+    company_size: shortlistItem.company_size,
+    hq_location: shortlistItem.hq_location,
+    usp: shortlistItem.usp,
+    offerings_bulleted: shortlistItem.offerings_bulleted || [],
     target_audience_list: shortlistItem.target_audience_list || [],
     tone_summary: shortlistItem.tone_summary,
     keywords_top: shortlistItem.keywords_top || [],
+    tags: ['Customer'],
+    notes: shortlistItem.notes,
   };
 
-  // Upsert
+  // Upsert into customers
   const { data: customer, error: upsertError } = await supabase
     .from('customers')
     .upsert(customerData, { onConflict: 'url' })
@@ -179,17 +202,20 @@ async function handleAddFromShortlist(supabase: any, params: { url: string }) {
     );
   }
 
-  // Add "Customer" tag to shortlist
-  const tags = shortlistItem.tags || [];
-  if (!tags.includes('Customer')) {
-    await supabase
-      .from('shortlist')
-      .update({ tags: [...tags, 'Customer'] })
-      .eq('url', url);
+  // Delete from shortlist (move, not copy)
+  const { error: deleteError } = await supabase
+    .from('shortlist')
+    .delete()
+    .eq('url', url);
+
+  if (deleteError) {
+    console.error('[customers] Failed to delete from shortlist:', deleteError);
+    // Don't fail the request - customer was created successfully
   }
 
+  console.log('[customers] Moved from shortlist to customers:', url);
   return new Response(
-    JSON.stringify({ ok: true, data: customer }),
+    JSON.stringify({ ok: true, data: customer, message: 'Moved to Existing Customers.' }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }
