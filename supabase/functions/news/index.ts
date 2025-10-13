@@ -94,6 +94,25 @@ serve(async (req) => {
         'businesswire.com', 'prnewswire.com', 'techcrunch.com'
       ];
 
+      // Entity resolution
+      const resolveEntity = (url: string, companyCard: any) => {
+        const parsedUrl = new URL(url);
+        const domain = parsedUrl.hostname.replace('www.', '');
+        const domainParts = domain.split('.');
+        const baseName = domainParts[0];
+        const brand = companyCard?.name || baseName.charAt(0).toUpperCase() + baseName.slice(1);
+        
+        // Generate aliases
+        const aliases = [
+          brand,
+          brand.replace(/\s+/g, ''),
+          brand.replace(/-/g, ' '),
+          baseName
+        ].filter((v, i, a) => a.indexOf(v) === i); // dedupe
+        
+        return { brand, domain, aliases };
+      };
+
       // Get company name from company_cards
       const { data: companyCard } = await supabase
         .from('company_cards')
@@ -101,8 +120,8 @@ serve(async (req) => {
         .eq('url', url)
         .maybeSingle();
 
-      const companyName = companyCard?.name || new URL(url).hostname.replace('www.', '').split('.')[0];
-      console.log('Company name:', companyName);
+      const entity = resolveEntity(url, companyCard);
+      console.log('Entity resolved:', entity);
 
       // Get my_company_profile for relevance scoring
       const { data: myCompany } = await supabase
@@ -118,6 +137,13 @@ serve(async (req) => {
         .maybeSingle();
 
       const companyKeywords = companyData?.analysis_json?.keywords_top || [];
+      
+      // Helper to check if text mentions the entity
+      const mentionsEntity = (text: string): boolean => {
+        const lower = text.toLowerCase();
+        return entity.aliases.some(alias => lower.includes(alias.toLowerCase())) ||
+               lower.includes(entity.domain);
+      };
 
       // Check for provider keys
       const serpApiKey = Deno.env.get('SERPAPI_KEY');
@@ -160,8 +186,8 @@ serve(async (req) => {
       if (serpApiKey) {
         try {
           const queryFamilies = [
-            `"${companyName}" AND (AI OR agents OR data OR platform OR feature OR update OR rollout OR claims OR reveals OR unveils)`,
-            `"${companyName}" AND (launch OR announce OR partnership OR product OR integration)`
+            `("${entity.brand}" OR "${entity.domain}") AND (launch OR announce OR update OR AI OR agents OR integration OR partnership OR acquisition OR pricing OR hiring)`,
+            `("${entity.brand}" OR "${entity.domain}") AND (product OR feature OR platform OR security OR privacy OR data)`
           ];
 
           const locales = ['us', 'nl'];
@@ -188,6 +214,10 @@ serve(async (req) => {
                   for (const r of results) {
                     const parsedDate = parseDate(r.date);
                     if (!parsedDate || parsedDate < cutoffDate) continue;
+                    
+                    // Filter: must mention entity
+                    const snippet = r.snippet || '';
+                    if (!mentionsEntity(r.title) && !mentionsEntity(snippet)) continue;
 
                     const domain = new URL(r.link).hostname.replace('www.', '');
                     const domainScore = isDomainAllowed(r.link) ? 1.0 : 0.3;
@@ -196,7 +226,7 @@ serve(async (req) => {
                       title: r.title,
                       link: r.link,
                       publisher: r.source || domain,
-                      snippet: r.snippet || '',
+                      snippet,
                       published_at: parsedDate.toISOString(),
                       source: searchType.label === 'news' ? 'news' : 'web',
                       domainScore
@@ -216,7 +246,7 @@ serve(async (req) => {
         try {
           const fromDate = cutoffDate.toISOString().split('T')[0];
           const newsUrl = new URL('https://newsapi.org/v2/everything');
-          newsUrl.searchParams.set('q', companyName);
+          newsUrl.searchParams.set('q', `("${entity.brand}" OR "${entity.domain}") AND (launch OR update OR AI OR integration OR partnership OR acquisition OR pricing OR hiring)`);
           newsUrl.searchParams.set('from', fromDate);
           newsUrl.searchParams.set('sortBy', 'publishedAt');
           newsUrl.searchParams.set('language', 'en');
@@ -232,6 +262,10 @@ serve(async (req) => {
             for (const a of articles) {
               const parsedDate = parseDate(a.publishedAt);
               if (!parsedDate || parsedDate < cutoffDate) continue;
+              
+              // Filter: must mention entity
+              const snippet = a.description || '';
+              if (!mentionsEntity(a.title) && !mentionsEntity(snippet)) continue;
 
               const domainScore = isDomainAllowed(a.url) ? 1.0 : 0.3;
 
@@ -239,7 +273,7 @@ serve(async (req) => {
                 title: a.title,
                 link: a.url,
                 publisher: a.source?.name || new URL(a.url).hostname.replace('www.', ''),
-                snippet: a.description || '',
+                snippet,
                 published_at: parsedDate.toISOString(),
                 source: 'news',
                 domainScore
@@ -267,12 +301,15 @@ serve(async (req) => {
 
       console.log(`Found ${recentCandidates.length} candidates after filtering`);
 
-      // Cluster similar articles
+      // Cluster similar articles (improved fingerprinting)
       const normalize = (str: string) => {
-        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for'];
-        const words = str.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/)
+        const stopwords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'by', 'with'];
+        const words = str.toLowerCase()
+          .replace(/[^a-z0-9\s]/g, ' ')
+          .split(/\s+/)
           .filter(w => w.length > 3 && !stopwords.includes(w));
-        return words.slice(0, 10).sort().join(' ');
+        // Keep top 8 terms, sorted for stability
+        return words.slice(0, 8).sort().join(' ');
       };
 
       const clustered = new Map();
@@ -292,8 +329,8 @@ serve(async (req) => {
         );
         const mostRecent = sortedItems[0];
 
-        // Keep up to 4 sources
-        const sources = sortedItems.slice(0, 4).map((it: any) => ({
+        // Keep up to 5 sources
+        const sources = sortedItems.slice(0, 5).map((it: any) => ({
           title: it.title,
           link: it.link,
           publisher: it.publisher,
@@ -328,21 +365,26 @@ Industry: ${myCompany.industry}
 Value Proposition: ${myCompany.value_proposition}
 Keywords: ${myCompany.keywords?.join(', ')}` : 'Unknown'}
 
-Target company: ${companyName}
+Target company: ${entity.brand}
 Target keywords: ${companyKeywords.map((k: any) => k.value).join(', ')}
 
-News clusters (rate based on: AI, agents, data, platform, features, launches, partnerships, integrations, privacy, security, pricing):
+News clusters (rank by actionability + authority + relevance):
 ${clusters.map((c, i) => `[${i}] ${c.title}\n${c.snippet.substring(0, 200)}`).join('\n\n')}
+
+Scoring criteria:
+- Actionability: launches, GA releases, partnerships, acquisitions, pricing changes, leadership hires
+- Authority: boost reputable sources (techcrunch, theverge, bloomberg, reuters, wired, techzine)
+- Relevance: AI, agents, data platforms, integrations, security, privacy
 
 Return JSON array with same indices, each item:
 {
   "index": <number>,
   "relevance": 0.0-1.0,
-  "reason": "Why relevant (max 100 chars)",
+  "reason": "Why relevant/actionable (max 100 chars)",
   "summary": "Concise 1-2 line summary (max 200 chars)"
 }
 
-Rate items mentioning AI, agents, data platforms, integrations, or product updates highly even without explicit "launch" language.`;
+Rate items with actionable events highly even without "launch" keyword.`;
 
       const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
         method: 'POST',

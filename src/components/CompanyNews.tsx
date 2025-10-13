@@ -36,6 +36,7 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [items, setItems] = useState<NewsItem[]>([]);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const { toast } = useToast();
 
   const fetchNews = async () => {
@@ -58,6 +59,7 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
 
   useEffect(() => {
     fetchNews();
+    setLastRefreshed(new Date());
   }, [url]);
 
   const handleRefresh = async () => {
@@ -71,6 +73,7 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
 
       if (response.ok) {
         setItems(response.items || []);
+        setLastRefreshed(new Date());
         toast({
           title: "News refreshed",
           description: `Found ${response.items?.length || 0} relevant items`,
@@ -168,10 +171,13 @@ export const CompanyNews = ({ url }: CompanyNewsProps) => {
               <Newspaper className="h-5 w-5" />
               Company News
             </CardTitle>
-            <CardDescription>
-              {items.length === 0 
-                ? "No recent items found" 
-                : "AI summaries from recent news and posts. Max 5 items."}
+            <CardDescription className="space-y-1">
+              <div>Real news from the last 30 days. Clustered by topic.</div>
+              {lastRefreshed && (
+                <div className="text-xs text-muted-foreground">
+                  Last refreshed • {formatDistanceToNow(lastRefreshed, { addSuffix: true })}
+                </div>
+              )}
             </CardDescription>
           </div>
           <Button
