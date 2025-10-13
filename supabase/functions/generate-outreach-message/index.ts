@@ -54,6 +54,17 @@ serve(async (req) => {
       .eq('url', url)
       .single();
 
+    // Fetch recent news (last 60 days)
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: newsItems } = await supabase
+      .from('company_news')
+      .select('title, summary, quote, link, published_at, reason, relevance')
+      .eq('url', url)
+      .eq('deleted', false)
+      .gte('published_at', sixtyDaysAgo)
+      .order('relevance', { ascending: false })
+      .limit(3);
+
     // Prepare context for AI
     const context = {
       my_company: {
@@ -73,6 +84,7 @@ serve(async (req) => {
       },
       brand_tone: insights.outreach_guidance?.recommended_tone || "Professional",
       recommended_words: insights.outreach_guidance?.recommended_words || [],
+      news_context: newsItems || [],
       user_context: userContext
     };
 
@@ -106,6 +118,10 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 - If my_company.tone is set, harmonize it with the target brand_tone
 - Weave my_company.keywords naturally only if they fit
 - If my_company fields are null, skip them (don't mention the sender's company)
+
+IMPORTANT: If news_context is provided with recent company news, weave at most one concise reference to the most relevant item.
+Reference it respectfully (no hype), and only if it strengthens the appeal.
+Do not fabricate details beyond the provided summary/quote.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

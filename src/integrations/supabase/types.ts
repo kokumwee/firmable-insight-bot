@@ -136,6 +136,51 @@ export type Database = {
         }
         Relationships: []
       }
+      company_news: {
+        Row: {
+          created_at: string | null
+          deleted: boolean | null
+          id: string
+          link: string | null
+          published_at: string
+          quote: string | null
+          reason: string | null
+          relevance: number
+          source: string
+          summary: string
+          title: string
+          url: string
+        }
+        Insert: {
+          created_at?: string | null
+          deleted?: boolean | null
+          id?: string
+          link?: string | null
+          published_at: string
+          quote?: string | null
+          reason?: string | null
+          relevance?: number
+          source: string
+          summary: string
+          title: string
+          url: string
+        }
+        Update: {
+          created_at?: string | null
+          deleted?: boolean | null
+          id?: string
+          link?: string | null
+          published_at?: string
+          quote?: string | null
+          reason?: string | null
+          relevance?: number
+          source?: string
+          summary?: string
+          title?: string
+          url?: string
+        }
+        Relationships: []
+      }
       customers: {
         Row: {
           company_size: Json | null

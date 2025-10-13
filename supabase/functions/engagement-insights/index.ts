@@ -62,13 +62,25 @@ serve(async (req) => {
       );
     }
 
+    // Get recent news (last 60 days) for context
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: newsItems } = await supabase
+      .from('company_news')
+      .select('title, summary, quote, reason, relevance')
+      .eq('url', url)
+      .eq('deleted', false)
+      .gte('published_at', sixtyDaysAgo)
+      .order('relevance', { ascending: false })
+      .limit(3);
+
     // Prepare context for AI
     const context = {
       companyCard: companyCard || {},
       chunks: chunks.map(c => ({
         page_type: c.page_type,
         text: c.text.substring(0, 500) // Limit chunk size
-      }))
+      })),
+      news_context: newsItems || []
     };
 
     // Call Lovable AI for engagement analysis
@@ -112,7 +124,11 @@ Return strict JSON matching this schema:
 Tone labels should be from: Professional, Friendly, Playful, Authoritative, Bold, Caring, Innovative, Minimalist, Trustworthy.
 Sentiment score between 0 (very negative) and 1 (very positive).
 Select ≤ 8 most meaningful, non-generic keywords.
-Outreach example should be natural and 1–2 sentences max.`
+Outreach example should be natural and 1–2 sentences max.
+
+IMPORTANT: If news_context is provided with recent company news, consider these items when crafting outreach guidance.
+If a news item aligns well with the company's value proposition, propose a single, specific hook referencing it (max 1 sentence) in the example_message.
+Never invent facts. Only reference news items that are actually provided in the news_context.`
           },
           {
             role: 'user',
