@@ -21,5 +21,8 @@ verify_jwt = false
 [functions.generate-outreach-message]
 verify_jwt = false
 
+[functions.mycompany]
+verify_jwt = false
+
 [functions.shortlist]
 verify_jwt = false

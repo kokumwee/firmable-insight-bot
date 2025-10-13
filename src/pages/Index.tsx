@@ -12,6 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate, useLocation } from "react-router-dom";
+import { MyCompanyProfile } from "@/components/MyCompanyProfile";
+import { Label } from "@/components/ui/label";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -269,9 +271,39 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-12">
-        {/* Header */}
-        <header className="text-center mb-12 animate-fade-in">
+      <div className="flex">
+        {/* Left Sidebar */}
+        <aside className="w-80 border-r border-border bg-sidebar-background p-4 space-y-4 sticky top-0 h-screen overflow-y-auto">
+          <MyCompanyProfile />
+          
+          {/* URL Input in Sidebar */}
+          <div className="space-y-2">
+            <Label htmlFor="url-input" className="text-sm font-medium">Analyze URL</Label>
+            <Input
+              id="url-input"
+              type="url"
+              placeholder="https://example.com"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
+              disabled={state === "loading"}
+            />
+            <Button
+              onClick={() => handleAnalyze()}
+              disabled={state === "loading"}
+              className="w-full"
+            >
+              <Search className="h-4 w-4 mr-2" />
+              Analyze
+            </Button>
+          </div>
+        </aside>
+
+        {/* Main Content */}
+        <div className="flex-1">
+          <div className="container mx-auto px-4 py-12">
+            {/* Header */}
+            <header className="text-center mb-12 animate-fade-in">
           <div className="flex justify-end gap-2 mb-4">
             <Button variant="outline" onClick={() => navigate('/shortlist')}>
               <List className="h-4 w-4 mr-2" />
@@ -290,29 +322,6 @@ const Index = () => {
           </p>
         </header>
 
-        {/* URL Input Section */}
-        <div className="max-w-2xl mx-auto mb-12 animate-slide-up">
-          <div className="flex gap-4">
-            <Input
-              type="url"
-              placeholder="Enter website URL (e.g., https://example.com)"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
-              disabled={state === "loading"}
-              className="flex-1 text-base"
-            />
-            <Button
-              onClick={() => handleAnalyze()}
-              disabled={state === "loading"}
-              size="lg"
-              className="px-8"
-            >
-              <Search className="h-5 w-5 mr-2" />
-              Analyze
-            </Button>
-          </div>
-        </div>
 
         {/* Loading State */}
         {state === "loading" && <LoadingSteps progress={crawlProgress} />}
@@ -390,6 +399,8 @@ const Index = () => {
             <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
           </div>
         )}
+          </div>
+        </div>
       </div>
     </div>
   );

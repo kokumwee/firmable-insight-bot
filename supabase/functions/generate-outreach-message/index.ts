@@ -26,6 +26,13 @@ serve(async (req) => {
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // Get user's company profile
+    const { data: myCompany } = await supabase
+      .from('my_company_profile')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
     // Get engagement insights
     const { data: insights, error: insightsError } = await supabase
       .from('engagement_insights')
@@ -49,6 +56,15 @@ serve(async (req) => {
 
     // Prepare context for AI
     const context = {
+      my_company: {
+        name: myCompany?.name || null,
+        industry: myCompany?.industry || null,
+        description: myCompany?.description || null,
+        target_audience: myCompany?.target_audience || null,
+        value_proposition: myCompany?.value_proposition || null,
+        tone: myCompany?.tone || null,
+        keywords: myCompany?.keywords || []
+      },
       company: {
         name: companyCard?.name || "the company",
         industry: companyCard?.industry?.value || "their industry",
@@ -84,6 +100,12 @@ Guidelines:
 - Avoid clichés like "synergy", "touch base", "circle back"
 - Use the recommended words naturally when they fit
 - Make it feel personal and genuine
+
+Also use the sender's company profile (my_company) to personalize the outreach:
+- Reflect the sender's value proposition and audience when relevant
+- If my_company.tone is set, harmonize it with the target brand_tone
+- Weave my_company.keywords naturally only if they fit
+- If my_company fields are null, skip them (don't mention the sender's company)
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },
