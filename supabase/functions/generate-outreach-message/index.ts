@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
-import { toUrlKey } from "../_shared/urlUtils.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,8 +20,6 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-    
-    const urlKey = toUrlKey(url);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -57,30 +54,6 @@ serve(async (req) => {
       .eq('url', url)
       .single();
 
-    // Fetch recent news (last 30 days only)
-    const cutoffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: newsItems } = await supabase
-      .from('company_news')
-      .select('title, summary, quote, link, published_at, reason, relevance, sources')
-      .eq('url_key', urlKey)
-      .eq('deleted', false)
-      .gte('published_at', cutoffDate)
-      .order('relevance', { ascending: false })
-      .limit(3);
-
-    // Mark relevance based on keyword overlap
-    const myKeywords = myCompany?.keywords || [];
-    const vpWords = myCompany?.value_proposition?.toLowerCase().split(/\s+/) || [];
-    const targetKeywords = (companyCard?.analysis_json?.keywords_top || []).map((k: any) => k.value);
-    const allKeywords = [...myKeywords, ...targetKeywords, ...vpWords]
-      .map((k: string) => k.toLowerCase())
-      .filter((k: string) => k.length > 3);
-
-    const relevantNews = (newsItems || []).filter((item: any) => {
-      const text = `${item.title} ${item.summary}`.toLowerCase();
-      return allKeywords.some((kw: string) => text.includes(kw));
-    });
-
     // Prepare context for AI
     const context = {
       my_company: {
@@ -100,7 +73,6 @@ serve(async (req) => {
       },
       brand_tone: insights.outreach_guidance?.recommended_tone || "Professional",
       recommended_words: insights.outreach_guidance?.recommended_words || [],
-      news_context: relevantNews,
       user_context: userContext
     };
 
@@ -134,10 +106,6 @@ Also use the sender's company profile (my_company) to personalize the outreach:
 - If my_company.tone is set, harmonize it with the target brand_tone
 - Weave my_company.keywords naturally only if they fit
 - If my_company fields are null, skip them (don't mention the sender's company)
-
-IMPORTANT: If news_context is provided and contains relevant items, include at most one concise, tasteful reference to the most relevant news item.
-Only reference news items within the last 30 days. Cite the event generally without URLs, and only if it strengthens the message naturally.
-Do not reference news if it doesn't fit or fabricate details beyond the provided summary/quote.
 
 Return ONLY the outreach message as plain text, ready to copy-paste. No markdown, no JSON, no explanations.`
           },

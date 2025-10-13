@@ -104,7 +104,6 @@ export type Database = {
           resolvers: Json | null
           target_audience: Json | null
           url: string
-          url_key: string | null
           usp: Json | null
         }
         Insert: {
@@ -119,7 +118,6 @@ export type Database = {
           resolvers?: Json | null
           target_audience?: Json | null
           url: string
-          url_key?: string | null
           usp?: Json | null
         }
         Update: {
@@ -134,101 +132,7 @@ export type Database = {
           resolvers?: Json | null
           target_audience?: Json | null
           url?: string
-          url_key?: string | null
           usp?: Json | null
-        }
-        Relationships: []
-      }
-      company_news: {
-        Row: {
-          cluster_id: string | null
-          created_at: string | null
-          deleted: boolean | null
-          id: string
-          link: string | null
-          published_at: string
-          quote: string | null
-          reason: string | null
-          relevance: number
-          source: string
-          sources: Json | null
-          summary: string
-          title: string
-          url: string
-          url_key: string | null
-        }
-        Insert: {
-          cluster_id?: string | null
-          created_at?: string | null
-          deleted?: boolean | null
-          id?: string
-          link?: string | null
-          published_at: string
-          quote?: string | null
-          reason?: string | null
-          relevance?: number
-          source: string
-          sources?: Json | null
-          summary: string
-          title: string
-          url: string
-          url_key?: string | null
-        }
-        Update: {
-          cluster_id?: string | null
-          created_at?: string | null
-          deleted?: boolean | null
-          id?: string
-          link?: string | null
-          published_at?: string
-          quote?: string | null
-          reason?: string | null
-          relevance?: number
-          source?: string
-          sources?: Json | null
-          summary?: string
-          title?: string
-          url?: string
-          url_key?: string | null
-        }
-        Relationships: []
-      }
-      company_news_debug: {
-        Row: {
-          created_at: string
-          dropped_reason: string | null
-          id: string
-          link: string | null
-          parsed_ok: boolean | null
-          published_at_raw: string | null
-          publisher: string | null
-          stage: string
-          title: string | null
-          url_key: string
-        }
-        Insert: {
-          created_at?: string
-          dropped_reason?: string | null
-          id?: string
-          link?: string | null
-          parsed_ok?: boolean | null
-          published_at_raw?: string | null
-          publisher?: string | null
-          stage: string
-          title?: string | null
-          url_key: string
-        }
-        Update: {
-          created_at?: string
-          dropped_reason?: string | null
-          id?: string
-          link?: string | null
-          parsed_ok?: boolean | null
-          published_at_raw?: string | null
-          publisher?: string | null
-          stage?: string
-          title?: string | null
-          url_key?: string
         }
         Relationships: []
       }
@@ -626,10 +530,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      cleanup_old_news_debug: {
-        Args: Record<PropertyKey, never>
-        Returns: undefined
-      }
+      [_ in never]: never
     }
     Enums: {
       [_ in never]: never

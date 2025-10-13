@@ -26,6 +26,3 @@ verify_jwt = false
 
 [functions.shortlist]
 verify_jwt = false
-
-[functions.news]
-verify_jwt = false

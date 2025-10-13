@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
-import { toUrlKey } from "../_shared/urlUtils.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,8 +20,6 @@ serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-    
-    const urlKey = toUrlKey(url);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -65,44 +62,13 @@ serve(async (req) => {
       );
     }
 
-    // Get recent news (last 30 days only) for context
-    const cutoffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: newsItems } = await supabase
-      .from('company_news')
-      .select('title, summary, quote, reason, relevance')
-      .eq('url_key', urlKey)
-      .eq('deleted', false)
-      .gte('published_at', cutoffDate)
-      .order('relevance', { ascending: false })
-      .limit(3);
-
-    // Get my company profile for relevance marking
-    const { data: myCompany } = await supabase
-      .from('my_company_profile')
-      .select('keywords, value_proposition')
-      .maybeSingle();
-
-    // Mark relevance based on keyword overlap
-    const myKeywords = myCompany?.keywords || [];
-    const vpWords = myCompany?.value_proposition?.toLowerCase().split(/\s+/) || [];
-    const targetKeywords = (companyCard?.analysis_json?.keywords_top || []).map((k: any) => k.value);
-    const allKeywords = [...myKeywords, ...targetKeywords, ...vpWords]
-      .map(k => k.toLowerCase())
-      .filter(k => k.length > 3);
-
-    const relevantNews = (newsItems || []).filter((item: any) => {
-      const text = `${item.title} ${item.summary}`.toLowerCase();
-      return allKeywords.some(kw => text.includes(kw));
-    });
-
     // Prepare context for AI
     const context = {
       companyCard: companyCard || {},
       chunks: chunks.map(c => ({
         page_type: c.page_type,
         text: c.text.substring(0, 500) // Limit chunk size
-      })),
-      news_context: relevantNews
+      }))
     };
 
     // Call Lovable AI for engagement analysis
@@ -146,11 +112,7 @@ Return strict JSON matching this schema:
 Tone labels should be from: Professional, Friendly, Playful, Authoritative, Bold, Caring, Innovative, Minimalist, Trustworthy.
 Sentiment score between 0 (very negative) and 1 (very positive).
 Select ≤ 8 most meaningful, non-generic keywords.
-Outreach example should be natural and 1–2 sentences max.
-
-IMPORTANT: If news_context is provided with recent company news, consider these items when crafting outreach guidance.
-If a news item aligns well with the company's value proposition, propose a single, specific hook referencing it (max 1 sentence) in the example_message.
-Never invent facts. Only reference news items that are actually provided in the news_context.`
+Outreach example should be natural and 1–2 sentences max.`
           },
           {
             role: 'user',

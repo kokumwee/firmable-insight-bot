@@ -7,7 +7,6 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { CompanyNews } from "./CompanyNews";
 
 interface Keyword {
   term: string;
@@ -259,9 +258,6 @@ export const EngagementInsights = ({ url }: EngagementInsightsProps) => {
           </div>
         </CardContent>
       </Card>
-
-      {/* Company News */}
-      <CompanyNews url={url} />
 
       {/* Outreach Guidance */}
       <Card>
