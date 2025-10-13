@@ -1203,12 +1203,31 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                       </CardHeader>
 
                       <CardContent className="space-y-4">
-                        <div className="bg-muted/50 rounded-lg p-4">
-                          <p className="text-sm leading-relaxed line-clamp-2">{getReasonText(task)}</p>
+                        <div className="bg-muted/50 rounded-lg p-4 space-y-2">
+                          {task.reason_code === 'news' && task.news_relevance_reason ? (
+                            <div className="space-y-2">
+                              <div className="flex items-start gap-2">
+                                <Badge variant="secondary" className="text-xs shrink-0">
+                                  {task.news_group_labels?.[0] || 'News'}
+                                </Badge>
+                                <p className="text-sm leading-relaxed flex-1">
+                                  {task.news_blurb_snippet || getReasonText(task)}
+                                </p>
+                              </div>
+                              <div className="flex items-start gap-2 pl-1 pt-1 border-l-2 border-primary/30">
+                                <span className="text-xs font-medium text-primary shrink-0">Why this matters →</span>
+                                <p className="text-xs leading-relaxed text-muted-foreground">
+                                  {task.news_relevance_reason}
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-sm leading-relaxed">{getReasonText(task)}</p>
+                          )}
                           {task.reason_code === 'news' && task.customer?.url && (
                             <button
                               onClick={() => navigate('/customers?tab=news')}
-                              className="text-xs text-primary hover:underline mt-2"
+                              className="text-xs text-primary hover:underline flex items-center gap-1"
                             >
                               View sources →
                             </button>
@@ -1432,13 +1451,18 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                         <CardContent className="pt-6">
                           <div className="space-y-4">
                             <div>
-                              <p className="text-sm leading-relaxed">{summary.summary}</p>
+                              <p className="text-sm leading-relaxed text-muted-foreground">{summary.summary}</p>
                             </div>
                             
                             {summary.why_it_matters && (
-                              <div className="mt-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
-                                <p className="text-xs font-semibold text-primary mb-1">Why this matters to you</p>
-                                <p className="text-sm text-foreground">{summary.why_it_matters}</p>
+                              <div className="mt-6 pt-4 border-t">
+                                <div className="flex items-center gap-2 mb-3">
+                                  <div className="h-1 w-1 rounded-full bg-primary"></div>
+                                  <h4 className="text-sm font-bold text-primary">Why this matters to you</h4>
+                                </div>
+                                <p className="text-sm leading-relaxed pl-3 border-l-2 border-primary/30">
+                                  {summary.why_it_matters}
+                                </p>
                               </div>
                             )}
                             
@@ -1454,8 +1478,9 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                                       <h4 className="font-medium text-sm mb-1">{group.label}</h4>
                                       <p className="text-sm text-muted-foreground mb-2">{group.blurb}</p>
                                       {group.why_it_matters && (
-                                        <p className="text-xs text-muted-foreground/80 italic mb-2">
-                                          Why it matters: {group.why_it_matters}
+                                        <p className="text-xs text-muted-foreground italic mb-2 flex items-start gap-1">
+                                          <span className="font-medium not-italic">💡</span>
+                                          <span>Why it matters: {group.why_it_matters}</span>
                                         </p>
                                       )}
                                       <div className="text-xs text-muted-foreground">

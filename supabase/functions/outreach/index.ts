@@ -109,7 +109,30 @@ async function buildToday(supabase: any, force: boolean) {
       );
 
       if (fresh && actionable.length > 0) {
-        // Check for news cooldown (7 days)
+        // Check for existing open news task (sticky P1 logic)
+        const { data: existingNews } = await supabase
+          .from('outreach_tasks')
+          .select('id, recommended_at, news_published_at, status')
+          .eq('customer_id', customer.id)
+          .eq('reason_code', 'news')
+          .eq('status', 'open')
+          .order('recommended_at', { ascending: false })
+          .limit(1);
+
+        // Check if existing news is still fresh (< 30 days old)
+        const stillFresh =
+          existingNews?.[0] &&
+          existingNews[0].news_published_at &&
+          new Date(existingNews[0].news_published_at) >
+            new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+        if (stillFresh) {
+          // Keep existing P1 task; skip creating new one
+          console.log(`Keeping existing news task for ${customer.name} (still fresh)`);
+          continue;
+        }
+
+        // Check for news cooldown (7 days) only if no sticky task
         const { data: recentNews } = await supabase
           .from('outreach_tasks')
           .select('id')

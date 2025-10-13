@@ -247,7 +247,7 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+      <PopoverTrigger asChild className="fixed bottom-6 right-6 z-50">
         <Button variant="outline" className="gap-2">
           <Calendar className="h-4 w-4" />
           Today's Outreach
@@ -258,18 +258,33 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[480px] p-0" align="end" sideOffset={8}>
-        <div className="p-4 border-b">
+      <PopoverContent className="w-[500px] max-h-[80vh] overflow-hidden p-0" align="end" side="top" sideOffset={8}>
+        <div className="p-4 border-b bg-muted/50">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-semibold">Today's Outreach</h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="h-7 w-7 p-0"
+            >
+              {refreshing ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3 w-3" />
+              )}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">Top 5 priority tasks</p>
             <span className="text-xs text-muted-foreground">
-              Updated • {formatDistanceToNow(new Date(), { addSuffix: true })}
+              Updated • {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
-          <p className="text-xs text-muted-foreground">Top 5 priority tasks</p>
         </div>
 
-        <ScrollArea className="max-h-[60vh]">
+        <ScrollArea className="max-h-[calc(80vh-140px)]">
           {loading ? (
             <div className="p-8 text-center text-sm text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
@@ -286,26 +301,47 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
               {tasks.map((task) => {
                 const chip = getReasonChip(task.reason_code);
                 return (
-                  <div key={task.id} className="p-4 hover:bg-muted/50 transition-colors">
-                    <div className="flex items-start justify-between gap-2 mb-3">
+                  <div key={task.id} className="p-4 hover:bg-muted/50 transition-colors space-y-3">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
-                        <h4 className="font-medium text-sm mb-1">{task.customer.name}</h4>
-                        <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{getContextLine(task)}</p>
+                        <div className="flex items-center gap-2 mb-2">
+                          <h4 className="font-medium text-sm">{task.customer.name}</h4>
+                          <Badge variant={chip.variant} className="text-xs shrink-0">
+                            {chip.emoji} {chip.label}
+                          </Badge>
+                        </div>
+                        {task.reason_code === 'news' && task.news_relevance_reason ? (
+                          <div className="space-y-2">
+                            <div className="flex items-start gap-2">
+                              <Badge variant="secondary" className="text-xs shrink-0">
+                                {task.news_group_labels?.[0] || 'News'}
+                              </Badge>
+                              <p className="text-xs leading-relaxed text-muted-foreground line-clamp-2">
+                                {task.news_blurb_snippet || getContextLine(task)}
+                              </p>
+                            </div>
+                            <div className="flex items-start gap-2 pl-1 border-l-2 border-primary/30">
+                              <span className="text-xs font-medium text-primary shrink-0">Why →</span>
+                              <p className="text-xs leading-relaxed text-muted-foreground line-clamp-2">
+                                {task.news_relevance_reason}
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{getContextLine(task)}</p>
+                        )}
                         {task.reason_code === 'news' && (
                           <button
                             onClick={() => {
                               setOpen(false);
-                              navigate(`/customers?tab=news&company=${encodeURIComponent(task.customer.url)}`);
+                              navigate('/customers?tab=news');
                             }}
-                            className="text-xs text-primary hover:underline mt-1"
+                            className="text-xs text-primary hover:underline mt-2 flex items-center gap-1"
                           >
                             View sources →
                           </button>
                         )}
                       </div>
-                      <Badge variant={chip.variant} className="text-xs shrink-0">
-                        {chip.emoji} {chip.label}
-                      </Badge>
                     </div>
 
                     {generatedMessages[task.id] && (
@@ -374,43 +410,18 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
           )}
         </ScrollArea>
 
-        <div className="p-3 border-t space-y-2">
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="flex-1"
-              onClick={() => {
-                setOpen(false);
-                navigate('/customers?tab=outreach');
-              }}
-            >
-              <ExternalLink className="h-3 w-3 mr-2" />
-              Open full view
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRefresh}
-              disabled={refreshing}
-            >
-              {refreshing ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3 w-3" />
-              )}
-            </Button>
-          </div>
+        <div className="p-3 border-t">
           <Button
             size="sm"
-            variant="ghost"
-            className="w-full h-7 text-xs"
+            variant="outline"
+            className="w-full"
             onClick={() => {
               setOpen(false);
-              navigate('/customers?tab=news');
+              navigate('/customers?tab=outreach');
             }}
           >
-            View Company News
+            <ExternalLink className="h-3 w-3 mr-2" />
+            Open full view
           </Button>
         </div>
       </PopoverContent>
