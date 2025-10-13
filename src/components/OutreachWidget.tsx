@@ -329,30 +329,43 @@ export function OutreachWidget({ count, onCountChange }: OutreachWidgetProps) {
           )}
         </ScrollArea>
 
-        <div className="p-3 border-t flex gap-2">
+        <div className="p-3 border-t space-y-2">
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1"
+              onClick={() => {
+                setOpen(false);
+                navigate('/customers?tab=outreach');
+              }}
+            >
+              <ExternalLink className="h-3 w-3 mr-2" />
+              Open full view
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRefresh}
+              disabled={refreshing}
+            >
+              {refreshing ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3 w-3" />
+              )}
+            </Button>
+          </div>
           <Button
             size="sm"
-            variant="outline"
-            className="flex-1"
+            variant="ghost"
+            className="w-full h-7 text-xs"
             onClick={() => {
               setOpen(false);
-              navigate('/outreach');
+              navigate('/customers?tab=news');
             }}
           >
-            <ExternalLink className="h-3 w-3 mr-2" />
-            Open full view
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleRefresh}
-            disabled={refreshing}
-          >
-            {refreshing ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3 w-3" />
-            )}
+            View Company News
           </Button>
         </div>
       </PopoverContent>
