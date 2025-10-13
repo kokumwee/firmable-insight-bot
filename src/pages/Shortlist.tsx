@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Grid, List, ExternalLink, Trash2, Copy, Sparkles, RefreshCw, Eye, Mail } from "lucide-react";
+import { Grid, List, ExternalLink, Trash2, Copy, Sparkles, RefreshCw, Eye, Mail, Users } from "lucide-react";
 import { ConfidenceBadge, ConfidenceLevel } from "@/components/ConfidenceBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
@@ -171,6 +171,32 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
       title: "Copied!",
       description: "Summary copied to clipboard",
     });
+  };
+
+  const handleAddToCustomers = async (item: ShortlistItem) => {
+    try {
+      const { data, error } = await supabase.functions.invoke('customers', {
+        body: {
+          action: 'add_from_shortlist',
+          url: item.url
+        }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message);
+
+      toast({
+        title: "Saved to Customers!",
+        description: "Customer added successfully",
+      });
+    } catch (error) {
+      console.error('Error adding to customers:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to add to customers",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleUpdateMeta = async (url: string) => {
@@ -466,6 +492,22 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
+                                handleAddToCustomers(item);
+                              }}
+                            >
+                              <Users className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Add / Update as Customer</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setItemToRemove(item);
                               }}
                             >
@@ -706,6 +748,19 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Copy Summary</TooltipContent>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleAddToCustomers(item)}
+                              >
+                                <Users className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Add / Update as Customer</TooltipContent>
                           </Tooltip>
 
                           <Tooltip>

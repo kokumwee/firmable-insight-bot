@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, Bookmark, List } from "lucide-react";
+import { Search, Bookmark, List, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -57,6 +57,7 @@ const Index = () => {
   const [crawlProgress, setCrawlProgress] = useState<{ stage: string; current: number; total: number } | null>(null);
   const [engagementData, setEngagementData] = useState<any>(null);
   const [savingToShortlist, setSavingToShortlist] = useState(false);
+  const [savingToCustomers, setSavingToCustomers] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("insights");
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -228,15 +229,50 @@ const Index = () => {
     }
   };
 
+  const handleSaveToCustomers = async () => {
+    if (!companyData?.url) return;
+    
+    setSavingToCustomers(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('customers', {
+        body: {
+          action: 'add_from_analysis',
+          url: companyData.url
+        }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error(data.error?.message);
+
+      toast({
+        title: "Saved to Customers!",
+        description: "Customer added successfully",
+      });
+    } catch (error) {
+      console.error('Error saving to customers:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to save to customers",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingToCustomers(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <div className="container mx-auto px-4 py-12">
         {/* Header */}
         <header className="text-center mb-12 animate-fade-in">
-          <div className="flex justify-end mb-4">
+          <div className="flex justify-end gap-2 mb-4">
             <Button variant="outline" onClick={() => navigate('/shortlist')}>
               <List className="h-4 w-4 mr-2" />
               My Shortlist
+            </Button>
+            <Button variant="outline" onClick={() => navigate('/customers')}>
+              <Users className="h-4 w-4 mr-2" />
+              Existing Customers
             </Button>
           </div>
           <h1 className="text-5xl font-bold text-foreground mb-4">
@@ -294,7 +330,7 @@ const Index = () => {
         {/* Success State */}
         {state === "success" && companyData && (
           <div id="results" className="space-y-8">
-            <div className="flex justify-center mb-6">
+            <div className="flex justify-center gap-3 mb-6">
               <Button 
                 onClick={handleSaveToShortlist}
                 disabled={savingToShortlist}
@@ -303,6 +339,16 @@ const Index = () => {
               >
                 <Bookmark className="h-5 w-5" />
                 {savingToShortlist ? "Saving..." : "Add to My Shortlist"}
+              </Button>
+              <Button 
+                onClick={handleSaveToCustomers}
+                disabled={savingToCustomers}
+                size="lg"
+                variant="secondary"
+                className="gap-2"
+              >
+                <Users className="h-5 w-5" />
+                {savingToCustomers ? "Saving..." : "Add / Update as Customer"}
               </Button>
             </div>
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full max-w-4xl mx-auto">
