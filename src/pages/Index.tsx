@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Search, Bookmark, List, Users, RefreshCw } from "lucide-react";
+import { Search, Bookmark, List, Users, RefreshCw, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -14,6 +14,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useNavigate, useLocation } from "react-router-dom";
 import { MyCompanyProfile } from "@/components/MyCompanyProfile";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { useOutreachCount } from "@/hooks/useOutreachCount";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -64,6 +67,7 @@ const Index = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
+  const { count: outreachCount } = useOutreachCount();
 
   // Handle preload from navigation state
   useEffect(() => {
@@ -304,16 +308,34 @@ const Index = () => {
           <div className="container mx-auto px-4 py-12">
             {/* Header */}
             <header className="text-center mb-12 animate-fade-in">
-          <div className="flex justify-end gap-2 mb-4">
-            <Button variant="outline" onClick={() => navigate('/shortlist')}>
-              <List className="h-4 w-4 mr-2" />
-              My Shortlist
-            </Button>
-            <Button variant="outline" onClick={() => navigate('/customers')}>
-              <Users className="h-4 w-4 mr-2" />
-              Existing Customers
-            </Button>
-          </div>
+          <TooltipProvider>
+            <div className="flex justify-end gap-2 mb-4">
+              <Button variant="outline" onClick={() => navigate('/shortlist')}>
+                <List className="h-4 w-4 mr-2" />
+                My Shortlist
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/customers')}>
+                <Users className="h-4 w-4 mr-2" />
+                Existing Customers
+              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" onClick={() => navigate('/outreach')}>
+                    <Calendar className="h-4 w-4 mr-2" />
+                    Today's Outreach
+                    {outreachCount > 0 && (
+                      <Badge variant="default" className="ml-2">
+                        {outreachCount}
+                      </Badge>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  View today's recommended customers to contact
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
           <h1 className="text-5xl font-bold text-foreground mb-4">
             Firmable Demo – Kokum
           </h1>

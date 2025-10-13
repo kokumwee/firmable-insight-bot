@@ -319,9 +319,17 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
               <h1 className="text-3xl font-bold">My Shortlist</h1>
               <p className="text-muted-foreground">Saved companies and insights</p>
             </div>
-            <Button variant="outline" onClick={() => window.location.href = "/"}>
-              Back to Analyze
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => navigate('/outreach')}>
+                Today's Outreach
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/customers')}>
+                Customers
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/')}>
+                Back to Analyze
+              </Button>
+            </div>
           </div>
 
           {/* Toolbar */}

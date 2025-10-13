@@ -17,7 +17,7 @@ import {
   Loader2
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDistanceToNow } from "date-fns";
 
@@ -58,6 +58,7 @@ export default function TodaysOutreach() {
   const [generatedMessages, setGeneratedMessages] = useState<Record<string, string>>({});
   const { toast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     loadTasks();
@@ -307,8 +308,14 @@ export default function TodaysOutreach() {
                 )}
                 Refresh Tasks
               </Button>
+              <Button variant="outline" onClick={() => navigate('/shortlist')}>
+                Shortlist
+              </Button>
               <Button variant="outline" onClick={() => navigate('/customers')}>
-                View Customers
+                Customers
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/')}>
+                Back to Analyze
               </Button>
             </div>
           </div>

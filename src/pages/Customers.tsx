@@ -570,9 +570,17 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                 Manage your customer relationships and engagement history
               </p>
             </div>
-            <Button variant="outline" onClick={() => navigate('/')}>
-              Back to Analyze
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => navigate('/outreach')}>
+                Today's Outreach
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/shortlist')}>
+                Shortlist
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/')}>
+                Back to Analyze
+              </Button>
+            </div>
           </div>
 
           <Alert className="mb-6">
