@@ -4,10 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PageHeader } from "@/components/PageHeader";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Grid, List, ExternalLink, Trash2, Copy, Mail, Eye, CheckCircle, Info } from "lucide-react";
+import { Grid, List, ExternalLink, Trash2, Copy, Mail, Eye, CheckCircle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate } from "react-router-dom";
 import { 
@@ -22,7 +21,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { formatDistanceToNow } from "date-fns";
 
 interface CustomerItem {
@@ -570,19 +568,20 @@ Audience: ${(item.target_audience_list || []).join(", ")}
 
   return (
     <div className="min-h-screen bg-background">
-      <PageHeader
-        title="Existing Customers"
-        subtitle="Current customers and engagement history."
-        actions={
-          <>
-            <Alert className="mr-4 py-2 px-3">
-              <Info className="h-4 w-4" />
-              <AlertDescription className="text-xs">
-                Core company data here is read-only. To refresh, re-analyze the company.
-              </AlertDescription>
-            </Alert>
+      {/* Header */}
+      <div className="border-b bg-card">
+        <div className="max-w-7xl mx-auto p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h1 className="text-3xl font-bold">Existing Customers</h1>
+              <p className="text-muted-foreground">Current customers and engagement history.</p>
+            </div>
+          </div>
+
+          {/* Toolbar */}
+          <div className="flex flex-col sm:flex-row gap-4 items-center">
             <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Sort by" />
               </SelectTrigger>
               <SelectContent>
@@ -591,23 +590,25 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                 <SelectItem value="last_contacted_asc">Stale First</SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              variant={viewMode === "cards" ? "default" : "outline"}
-              size="icon"
-              onClick={() => handleViewModeChange("cards")}
-            >
-              <Grid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "table" ? "default" : "outline"}
-              size="icon"
-              onClick={() => handleViewModeChange("table")}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </>
-        }
-      />
+            <div className="flex gap-2 ml-auto">
+              <Button
+                variant={viewMode === "cards" ? "default" : "outline"}
+                size="icon"
+                onClick={() => handleViewModeChange("cards")}
+              >
+                <Grid className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={viewMode === "table" ? "default" : "outline"}
+                size="icon"
+                onClick={() => handleViewModeChange("table")}
+              >
+                <List className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="max-w-7xl mx-auto p-6">
 
