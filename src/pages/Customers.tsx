@@ -46,11 +46,19 @@ interface CustomerItem {
 export default function Customers() {
   const [items, setItems] = useState<CustomerItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const [viewMode, setViewMode] = useState<"cards" | "table">(() => {
+    const saved = localStorage.getItem('ui.customersViewMode');
+    return (saved as "cards" | "table") || "cards";
+  });
   const [sortBy, setSortBy] = useState("created_at_desc");
   const [itemToRemove, setItemToRemove] = useState<CustomerItem | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  const handleViewModeChange = (mode: "cards" | "table") => {
+    setViewMode(mode);
+    localStorage.setItem('ui.customersViewMode', mode);
+  };
 
   useEffect(() => {
     loadItems();
@@ -347,7 +355,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
             <Button
               variant="outline"
               size="sm"
-              onClick={() => item.url && navigate('/', { state: { preloadUrl: item.url } })}
+              onClick={() => item.url && navigate('/analyze', { state: { preloadUrl: item.url } })}
               disabled={!item.url}
             >
               <Eye className="h-4 w-4" />
@@ -361,7 +369,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
             <Button
               variant="outline"
               size="sm"
-              onClick={() => item.url && navigate('/', { state: { preloadUrl: item.url, openEngagement: true } })}
+              onClick={() => item.url && navigate('/analyze', { state: { preloadUrl: item.url, openEngagement: true } })}
               disabled={!item.url}
             >
               <Mail className="h-4 w-4" />
@@ -489,7 +497,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => item.url && navigate('/', { state: { preloadUrl: item.url } })}
+                        onClick={() => item.url && navigate('/analyze', { state: { preloadUrl: item.url } })}
                         disabled={!item.url}
                       >
                         <Eye className="h-4 w-4" />
@@ -503,7 +511,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => item.url && navigate('/', { state: { preloadUrl: item.url, openEngagement: true } })}
+                        onClick={() => item.url && navigate('/analyze', { state: { preloadUrl: item.url, openEngagement: true } })}
                         disabled={!item.url}
                       >
                         <Mail className="h-4 w-4" />
@@ -570,17 +578,6 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                 Manage your customer relationships and engagement history
               </p>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate('/outreach')}>
-                Today's Outreach
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/shortlist')}>
-                Shortlist
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/')}>
-                Back to Analyze
-              </Button>
-            </div>
           </div>
 
           <Alert className="mb-6">
@@ -596,7 +593,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
               <Button
                 variant={viewMode === "cards" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setViewMode("cards")}
+                onClick={() => handleViewModeChange("cards")}
               >
                 <Grid className="h-4 w-4 mr-2" />
                 Cards
@@ -604,7 +601,7 @@ Audience: ${(item.target_audience_list || []).join(", ")}
               <Button
                 variant={viewMode === "table" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setViewMode("table")}
+                onClick={() => handleViewModeChange("table")}
               >
                 <List className="h-4 w-4 mr-2" />
                 Table

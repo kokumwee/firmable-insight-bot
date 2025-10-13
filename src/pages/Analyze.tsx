@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
-import { Search, Bookmark, List, Users, RefreshCw, Calendar } from "lucide-react";
+import { Search, Bookmark, RefreshCw, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoadingSteps } from "@/components/LoadingSteps";
 import { CompanyCard } from "@/components/CompanyCard";
@@ -11,12 +12,7 @@ import { MarketNeighbors } from "@/components/MarketNeighbors";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { useNavigate, useLocation } from "react-router-dom";
-import { MyCompanyProfile } from "@/components/MyCompanyProfile";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { useOutreachCount } from "@/hooks/useOutreachCount";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useLocation, useNavigate } from "react-router-dom";
 
 type AppState = "idle" | "loading" | "error" | "success";
 
@@ -54,7 +50,7 @@ interface CompanyData {
   analyzed_at: string;
 }
 
-const Index = () => {
+export default function Analyze() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<AppState>("idle");
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
@@ -65,9 +61,8 @@ const Index = () => {
   const [savingToCustomers, setSavingToCustomers] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("insights");
   const { toast } = useToast();
-  const navigate = useNavigate();
   const location = useLocation();
-  const { count: outreachCount } = useOutreachCount();
+  const navigate = useNavigate();
 
   // Handle preload from navigation state
   useEffect(() => {
@@ -274,158 +269,116 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="flex">
-        {/* Left Sidebar */}
-        <aside className="w-80 border-r border-border bg-sidebar-background p-4 space-y-4 sticky top-0 h-screen overflow-y-auto">
-          <MyCompanyProfile />
-          
-          {/* URL Input in Sidebar */}
-          <div className="space-y-2">
-            <Label htmlFor="url-input" className="text-sm font-medium">Analyze URL</Label>
-            <Input
-              id="url-input"
-              type="url"
-              placeholder="https://example.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
-              disabled={state === "loading"}
-            />
-            <Button
-              onClick={() => handleAnalyze()}
-              disabled={state === "loading"}
-              className="w-full"
-            >
-              <Search className="h-4 w-4 mr-2" />
-              Analyze
-            </Button>
-          </div>
-        </aside>
+    <div className="container mx-auto px-4 py-8 max-w-5xl">
+      {/* Page Header */}
+      <div className="mb-8">
+        <h2 className="text-3xl font-bold text-foreground mb-2">Analyze Companies</h2>
+        <p className="text-muted-foreground">
+          Paste a homepage URL to analyze and chat with company data.
+        </p>
+      </div>
 
-        {/* Main Content */}
-        <div className="flex-1">
-          <div className="container mx-auto px-4 py-12">
-            {/* Header */}
-            <header className="text-center mb-12 animate-fade-in">
-          <TooltipProvider>
-            <div className="flex justify-end gap-2 mb-4">
-              <Button variant="outline" onClick={() => navigate('/shortlist')}>
-                <List className="h-4 w-4 mr-2" />
-                My Shortlist
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/customers')}>
-                <Users className="h-4 w-4 mr-2" />
-                Existing Customers
-              </Button>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" onClick={() => navigate('/outreach')}>
-                    <Calendar className="h-4 w-4 mr-2" />
-                    Today's Outreach
-                    {outreachCount > 0 && (
-                      <Badge variant="default" className="ml-2">
-                        {outreachCount}
-                      </Badge>
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  View today's recommended customers to contact
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          </TooltipProvider>
-          <h1 className="text-5xl font-bold text-foreground mb-4">
-            Firmable Demo – Kokum
-          </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Paste a homepage URL to analyze and chat with company data.
-          </p>
-        </header>
-
-
-        {/* Loading State */}
-        {state === "loading" && <LoadingSteps progress={crawlProgress} />}
-
-        {/* Error State */}
-        {state === "error" && (
-          <Alert variant="destructive" className="max-w-2xl mx-auto animate-fade-in">
-            <AlertDescription>
-              <div className="flex items-center justify-between mb-2">
-                <span>{errorMessage}</span>
-                <Button variant="outline" size="sm" onClick={() => handleAnalyze()}>
-                  Retry
-                </Button>
-              </div>
-              <p className="text-sm opacity-80 mt-2">
-                Tip: Some sites block automated reads. Try a different URL or a less JS-heavy page.
-              </p>
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* Success State */}
-        {state === "success" && companyData && (
-          <div id="results" className="space-y-8">
-            <div className="flex justify-center gap-3 mb-6">
-              <Button 
-                onClick={handleSaveToShortlist}
-                disabled={savingToShortlist}
-                size="lg"
-                className="gap-2"
-              >
-                <Bookmark className="h-5 w-5" />
-                {savingToShortlist ? "Saving..." : "Add to My Shortlist"}
-              </Button>
-              <Button 
-                onClick={handleSaveToCustomers}
-                disabled={savingToCustomers}
-                size="lg"
-                variant="secondary"
-                className="gap-2"
-              >
-                {savingToCustomers ? (
-                  <>
-                    <RefreshCw className="h-5 w-5 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Users className="h-5 w-5" />
-                    Add / Update as Customer
-                  </>
-                )}
-              </Button>
-            </div>
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full max-w-4xl mx-auto">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="insights">Company Insights</TabsTrigger>
-                <TabsTrigger value="engagement">Engagement Insights</TabsTrigger>
-                <TabsTrigger value="neighbors">Market Neighbors</TabsTrigger>
-              </TabsList>
-              <TabsContent value="insights" className="space-y-8">
-                <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
-              </TabsContent>
-              <TabsContent value="engagement">
-                <EngagementInsights url={companyData.url} />
-              </TabsContent>
-              <TabsContent value="neighbors">
-            <MarketNeighbors 
-              currentUrl={companyData.url} 
-              companyCard={companyData}
-              engagement={engagementData}
-            />
-              </TabsContent>
-            </Tabs>
-            <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
-          </div>
-        )}
-          </div>
+      {/* URL Input Section */}
+      <div className="mb-8 space-y-3">
+        <Label htmlFor="analyze-url" className="text-sm font-medium">Company Website URL</Label>
+        <div className="flex gap-2">
+          <Input
+            id="analyze-url"
+            type="url"
+            placeholder="https://example.com"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAnalyze()}
+            disabled={state === "loading"}
+            className="flex-1"
+          />
+          <Button
+            onClick={() => handleAnalyze()}
+            disabled={state === "loading"}
+            size="lg"
+          >
+            <Search className="h-4 w-4 mr-2" />
+            Analyze
+          </Button>
         </div>
       </div>
+
+      {/* Loading State */}
+      {state === "loading" && <LoadingSteps progress={crawlProgress} />}
+
+      {/* Error State */}
+      {state === "error" && (
+        <Alert variant="destructive" className="animate-fade-in">
+          <AlertDescription>
+            <div className="flex items-center justify-between mb-2">
+              <span>{errorMessage}</span>
+              <Button variant="outline" size="sm" onClick={() => handleAnalyze()}>
+                Retry
+              </Button>
+            </div>
+            <p className="text-sm opacity-80 mt-2">
+              Tip: Some sites block automated reads. Try a different URL or a less JS-heavy page.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Success State */}
+      {state === "success" && companyData && (
+        <div id="results" className="space-y-6">
+          <div className="flex justify-center gap-3 mb-6">
+            <Button 
+              onClick={handleSaveToShortlist}
+              disabled={savingToShortlist}
+              size="lg"
+              className="gap-2"
+            >
+              <Bookmark className="h-5 w-5" />
+              {savingToShortlist ? "Saving..." : "Add to My Shortlist"}
+            </Button>
+            <Button 
+              onClick={handleSaveToCustomers}
+              disabled={savingToCustomers}
+              size="lg"
+              variant="secondary"
+              className="gap-2"
+            >
+              {savingToCustomers ? (
+                <>
+                  <RefreshCw className="h-5 w-5 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Users className="h-5 w-5" />
+                  Add / Update as Customer
+                </>
+              )}
+            </Button>
+          </div>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="insights">Company Insights</TabsTrigger>
+              <TabsTrigger value="engagement">Engagement Insights</TabsTrigger>
+              <TabsTrigger value="neighbors">Market Neighbors</TabsTrigger>
+            </TabsList>
+            <TabsContent value="insights" className="space-y-6">
+              <CompanyCard data={companyData} onReanalyze={handleReanalyze} />
+            </TabsContent>
+            <TabsContent value="engagement">
+              <EngagementInsights url={companyData.url} />
+            </TabsContent>
+            <TabsContent value="neighbors">
+              <MarketNeighbors 
+                currentUrl={companyData.url} 
+                companyCard={companyData}
+                engagement={engagementData}
+              />
+            </TabsContent>
+          </Tabs>
+          <ChatSection currentUrl={companyData.url} onAsk={handleAsk} />
+        </div>
+      )}
     </div>
   );
-};
-
-export default Index;
+}

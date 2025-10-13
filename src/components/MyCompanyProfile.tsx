@@ -23,7 +23,10 @@ interface ProfileData {
 const TONE_OPTIONS = ['Professional', 'Friendly', 'Bold', 'Technical', 'Conversational'];
 
 export function MyCompanyProfile() {
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(() => {
+    const saved = localStorage.getItem('ui.myCompanyCollapsed');
+    return saved ? saved === 'false' : false; // Default collapsed
+  });
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState<ProfileData>({
     name: '',
@@ -138,9 +141,14 @@ export function MyCompanyProfile() {
     return `${diffDays}d ago`;
   };
 
+  const handleToggle = (open: boolean) => {
+    setIsOpen(open);
+    localStorage.setItem('ui.myCompanyCollapsed', String(open));
+  };
+
   return (
-    <div className="border border-border rounded-lg bg-card">
-      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+    <div className="border border-border rounded-lg bg-card shadow-sm">
+      <Collapsible open={isOpen} onOpenChange={handleToggle}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between p-4 hover:bg-accent/50 transition-colors">
             <div className="flex flex-col items-start">

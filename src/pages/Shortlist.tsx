@@ -49,7 +49,10 @@ interface ShortlistItem {
 export default function Shortlist() {
   const [items, setItems] = useState<ShortlistItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const [viewMode, setViewMode] = useState<"cards" | "table">(() => {
+    const saved = localStorage.getItem('ui.shortlistViewMode');
+    return (saved as "cards" | "table") || "cards";
+  });
   const [sortBy, setSortBy] = useState("created_at_desc");
   const [selectedItem, setSelectedItem] = useState<ShortlistItem | null>(null);
   const [editingTags, setEditingTags] = useState<string>("");
@@ -59,6 +62,11 @@ export default function Shortlist() {
   const [itemToRemove, setItemToRemove] = useState<ShortlistItem | null>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
+
+  const handleViewModeChange = (mode: "cards" | "table") => {
+    setViewMode(mode);
+    localStorage.setItem('ui.shortlistViewMode', mode);
+  };
 
   useEffect(() => {
     loadItems();
@@ -151,11 +159,11 @@ export default function Shortlist() {
   };
 
   const handleViewInsights = (url: string) => {
-    navigate('/', { state: { preloadUrl: url } });
+    navigate('/analyze', { state: { preloadUrl: url } });
   };
 
   const handleGenerateOutreach = (url: string) => {
-    navigate('/', { state: { preloadUrl: url, openEngagement: true } });
+    navigate('/analyze', { state: { preloadUrl: url, openEngagement: true } });
   };
 
   const handleCopySummary = (item: ShortlistItem) => {
@@ -319,17 +327,6 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
               <h1 className="text-3xl font-bold">My Shortlist</h1>
               <p className="text-muted-foreground">Saved companies and insights</p>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate('/outreach')}>
-                Today's Outreach
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/customers')}>
-                Customers
-              </Button>
-              <Button variant="outline" onClick={() => navigate('/')}>
-                Back to Analyze
-              </Button>
-            </div>
           </div>
 
           {/* Toolbar */}
@@ -348,14 +345,14 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
               <Button
                 variant={viewMode === "cards" ? "default" : "outline"}
                 size="icon"
-                onClick={() => setViewMode("cards")}
+                onClick={() => handleViewModeChange("cards")}
               >
                 <Grid className="h-4 w-4" />
               </Button>
               <Button
                 variant={viewMode === "table" ? "default" : "outline"}
                 size="icon"
-                onClick={() => setViewMode("table")}
+                onClick={() => handleViewModeChange("table")}
               >
                 <List className="h-4 w-4" />
               </Button>
@@ -374,8 +371,8 @@ Analyzed: ${formatDate(item.analyzed_at)}`;
             <p className="text-muted-foreground mb-6">
               Analyze a company and click Add to My Shortlist to save it here.
             </p>
-            <Button onClick={() => navigate('/')}>
-              Go to Company Insights
+            <Button onClick={() => navigate('/analyze')}>
+              Go to Analyze Companies
             </Button>
           </div>
         ) : viewMode === "cards" ? (
