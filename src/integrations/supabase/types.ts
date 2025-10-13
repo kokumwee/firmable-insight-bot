@@ -232,6 +232,36 @@ export type Database = {
         }
         Relationships: []
       }
+      company_news_summaries: {
+        Row: {
+          article_count: number | null
+          company_name: string | null
+          generated_at: string | null
+          groups: Json | null
+          sources: string[] | null
+          summary: string | null
+          url_key: string
+        }
+        Insert: {
+          article_count?: number | null
+          company_name?: string | null
+          generated_at?: string | null
+          groups?: Json | null
+          sources?: string[] | null
+          summary?: string | null
+          url_key: string
+        }
+        Update: {
+          article_count?: number | null
+          company_name?: string | null
+          generated_at?: string | null
+          groups?: Json | null
+          sources?: string[] | null
+          summary?: string | null
+          url_key?: string
+        }
+        Relationships: []
+      }
       customers: {
         Row: {
           company_size: Json | null
@@ -251,6 +281,7 @@ export type Database = {
           tone_summary: string | null
           updated_at: string | null
           url: string | null
+          url_key: string | null
           usp: Json | null
         }
         Insert: {
@@ -271,6 +302,7 @@ export type Database = {
           tone_summary?: string | null
           updated_at?: string | null
           url?: string | null
+          url_key?: string | null
           usp?: Json | null
         }
         Update: {
@@ -291,6 +323,7 @@ export type Database = {
           tone_summary?: string | null
           updated_at?: string | null
           url?: string | null
+          url_key?: string | null
           usp?: Json | null
         }
         Relationships: []

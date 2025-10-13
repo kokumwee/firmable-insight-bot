@@ -29,3 +29,6 @@ verify_jwt = false
 
 [functions.outreach]
 verify_jwt = false
+
+[functions.news-summary]
+verify_jwt = false

@@ -6,7 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Grid, List, ExternalLink, Trash2, Copy, Mail, Eye, CheckCircle, RefreshCw, Loader2, Clock, Newspaper, Globe, Users as UsersIcon, AlertCircle } from "lucide-react";
+import { Grid, List, ExternalLink, Trash2, Copy, Mail, Eye, CheckCircle, RefreshCw, Loader2, Clock, Newspaper, Globe, Users as UsersIcon, AlertCircle, ChevronDown } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { 
@@ -117,6 +118,10 @@ export default function Customers() {
     return (saved as "cards" | "table") || "cards";
   });
   const [newsSortBy, setNewsSortBy] = useState("newest");
+  const [newsSummaries, setNewsSummaries] = useState<any[]>([]);
+  const [summariesLoading, setSummariesLoading] = useState(false);
+  const [refreshingSummary, setRefreshingSummary] = useState<string | null>(null);
+  const [selectedCompanies, setSelectedCompanies] = useState<string[]>([]);
   
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -209,51 +214,97 @@ export default function Customers() {
   };
   
   const loadNews = async () => {
-    setNewsLoading(true);
+    setSummariesLoading(true);
     try {
-      // Get customer url_keys
-      const customerUrlKeys = items.map(i => i.url_key).filter(Boolean);
-      if (customerUrlKeys.length === 0) {
-        setNewsItems([]);
-        setNewsLoading(false);
-        return;
-      }
-      
-      // Fetch news from last 30 days
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
-      const { data, error } = await supabase
-        .from('company_news')
-        .select('*')
-        .in('url_key', customerUrlKeys)
-        .eq('deleted', false)
-        .gte('published_at', thirtyDaysAgo.toISOString())
-        .order('published_at', { ascending: newsSortBy === 'oldest' });
+      const { data, error } = await supabase.functions.invoke('news-summary', {
+        body: { action: 'get_all', force: false }
+      });
 
       if (error) throw error;
+      if (!data.ok) throw new Error('Failed to load summaries');
 
-      let newsData = data || [];
+      let summaries = data.summaries || [];
       
-      // Sort by company if needed
-      if (newsSortBy === 'company') {
-        newsData = newsData.sort((a, b) => {
-          const customerA = items.find(i => i.url_key === a.url_key);
-          const customerB = items.find(i => i.url_key === b.url_key);
-          return (customerA?.name || '').localeCompare(customerB?.name || '');
-        });
+      // Apply company filter
+      if (selectedCompanies.length > 0) {
+        summaries = summaries.filter((s: any) => selectedCompanies.includes(s.url_key));
       }
       
-      setNewsItems(newsData as any);
+      // Apply sorting
+      if (newsSortBy === 'company') {
+        summaries.sort((a: any, b: any) => a.company_name.localeCompare(b.company_name));
+      } else if (newsSortBy === 'oldest') {
+        summaries.sort((a: any, b: any) => new Date(a.generated_at).getTime() - new Date(b.generated_at).getTime());
+      }
+
+      setNewsSummaries(summaries);
     } catch (error) {
-      console.error('Error loading news:', error);
+      console.error('Error loading news summaries:', error);
       toast({
         title: "Error",
-        description: "Failed to load company news",
+        description: "Failed to load company news summaries",
         variant: "destructive",
       });
     } finally {
-      setNewsLoading(false);
+      setSummariesLoading(false);
+    }
+  };
+  
+  const handleRefreshSummary = async (url_key: string) => {
+    setRefreshingSummary(url_key);
+    try {
+      const { data, error } = await supabase.functions.invoke('news-summary', {
+        body: { action: 'build', url_key, force: true }
+      });
+
+      if (error) throw error;
+      if (!data.ok) throw new Error('Failed to refresh summary');
+
+      toast({
+        title: "Refreshed",
+        description: "Summary updated successfully",
+      });
+      await loadNews();
+    } catch (error) {
+      console.error('Error refreshing summary:', error);
+      toast({
+        title: "Error",
+        description: "Failed to refresh summary",
+        variant: "destructive",
+      });
+    } finally {
+      setRefreshingSummary(null);
+    }
+  };
+  
+  const handleRefreshAllSummaries = async () => {
+    setSummariesLoading(true);
+    try {
+      const companiesToRefresh = selectedCompanies.length > 0 
+        ? items.filter(item => selectedCompanies.includes(item.url_key))
+        : items;
+      
+      for (const item of companiesToRefresh) {
+        await supabase.functions.invoke('news-summary', {
+          body: { action: 'build', url_key: item.url_key, force: true }
+        });
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      toast({
+        title: "Refreshed",
+        description: `Updated summaries for ${companiesToRefresh.length} companies`,
+      });
+      await loadNews();
+    } catch (error) {
+      console.error('Error refreshing summaries:', error);
+      toast({
+        title: "Error",
+        description: "Failed to refresh summaries",
+        variant: "destructive",
+      });
+    } finally {
+      setSummariesLoading(false);
     }
   };
   
@@ -1231,138 +1282,139 @@ Audience: ${(item.target_audience_list || []).join(", ")}
                   <SelectItem value="company">Company A-Z</SelectItem>
                 </SelectContent>
               </Select>
-              <div className="flex gap-2 ml-auto">
-                <Button
-                  variant={newsViewMode === "cards" ? "default" : "outline"}
-                  size="icon"
-                  onClick={() => handleNewsViewModeChange("cards")}
-                >
-                  <Grid className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant={newsViewMode === "table" ? "default" : "outline"}
-                  size="icon"
-                  onClick={() => handleNewsViewModeChange("table")}
-                >
-                  <List className="h-4 w-4" />
-                </Button>
-              </div>
+              
+              <Button
+                onClick={handleRefreshAllSummaries}
+                disabled={summariesLoading}
+                variant="outline"
+                className="ml-auto"
+              >
+                {summariesLoading ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Refresh All
+              </Button>
             </div>
 
-            {newsLoading ? (
+            {summariesLoading ? (
               <div className="space-y-4">
                 {[1, 2, 3].map(i => (
-                  <Skeleton key={i} className="h-32" />
+                  <Skeleton key={i} className="h-48" />
                 ))}
               </div>
-            ) : newsItems.length === 0 ? (
+            ) : newsSummaries.length === 0 ? (
               <div className="text-center py-24">
                 <Newspaper className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
                 <p className="text-xl font-semibold mb-2">No company news found</p>
                 <p className="text-muted-foreground">
-                  No news articles found in the past 30 days for your customers.
+                  No recent news detected for these companies in the past 30 days.
                 </p>
               </div>
-            ) : newsViewMode === "cards" ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {newsItems.map((newsItem) => {
-                  const customer = items.find(i => i.url_key === newsItem.url_key);
-                  const sources = (newsItem.sources as any) || [];
+            ) : (
+              <div className="space-y-6">
+                {newsSummaries.map((summary) => {
+                  const customer = items.find(i => i.url_key === summary.url_key);
+                  const hasNews = summary.article_count > 0;
+                  
                   return (
-                    <Card key={newsItem.id} className="hover:shadow-lg transition-shadow">
-                      <CardHeader>
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <a
-                            href={newsItem.link || (sources[0]?.link)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-semibold hover:underline text-lg flex-1"
-                          >
-                            {newsItem.title}
-                          </a>
-                        </div>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span>{newsItem.source}</span>
-                          <span>•</span>
-                          <span>{formatDistanceToNow(new Date(newsItem.published_at), { addSuffix: true })}</span>
-                        </div>
-                        {customer && (
-                          <Badge variant="secondary" className="mt-2 w-fit">
-                            {customer.name}
-                          </Badge>
-                        )}
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        <p className="text-sm">{newsItem.summary}</p>
-                        {newsItem.quote && (
-                          <blockquote className="border-l-2 border-primary pl-3 text-sm italic text-muted-foreground">
-                            "{newsItem.quote}"
-                          </blockquote>
-                        )}
-                        {sources.length > 1 && (
-                          <div className="text-xs text-muted-foreground">
-                            Also reported by:{' '}
-                            {sources.slice(1, 4).map((s: any, idx: number) => (
-                              <span key={idx}>
-                                <a href={s.link} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                                  {s.publisher}
-                                </a>
-                                {idx < Math.min(sources.length - 2, 2) && ', '}
-                              </span>
-                            ))}
+                    <Card key={summary.url_key} className="overflow-hidden">
+                      <CardHeader className="border-b bg-card">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2">
+                              <h3 className="text-xl font-semibold">{summary.company_name}</h3>
+                              <Badge variant="secondary" className="text-xs">
+                                Last updated • {formatDistanceToNow(new Date(summary.generated_at), { addSuffix: true })}
+                              </Badge>
+                              {!hasNews && (
+                                <Badge variant="outline" className="text-xs">
+                                  No recent news
+                                </Badge>
+                              )}
+                            </div>
                           </div>
-                        )}
-                      </CardContent>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleRefreshSummary(summary.url_key)}
+                              disabled={refreshingSummary === summary.url_key}
+                            >
+                              {refreshingSummary === summary.url_key ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </Button>
+                            {customer && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                asChild
+                              >
+                                <a href={customer.url} target="_blank" rel="noopener noreferrer">
+                                  <ExternalLink className="h-4 w-4" />
+                                </a>
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </CardHeader>
+                      
+                      {hasNews && (
+                        <CardContent className="pt-6">
+                          <div className="space-y-4">
+                            <div>
+                              <p className="text-sm leading-relaxed">{summary.summary}</p>
+                            </div>
+                            
+                            {summary.groups && summary.groups.length > 0 && (
+                              <Collapsible>
+                                <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium hover:underline">
+                                  <ChevronDown className="h-4 w-4" />
+                                  View themes ({summary.groups.length})
+                                </CollapsibleTrigger>
+                                <CollapsibleContent className="mt-4 space-y-4">
+                                  {summary.groups.map((group: any, idx: number) => (
+                                    <div key={idx} className="border-l-2 border-primary pl-4">
+                                      <h4 className="font-medium text-sm mb-1">{group.label}</h4>
+                                      <p className="text-sm text-muted-foreground mb-2">{group.blurb}</p>
+                                      <div className="text-xs text-muted-foreground">
+                                        Sources:{' '}
+                                        {group.items.slice(0, 3).map((item: any, i: number) => (
+                                          <span key={i}>
+                                            <a
+                                              href={item.link}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="hover:underline"
+                                            >
+                                              {item.publisher}
+                                            </a>
+                                            {i < Math.min(group.items.length - 1, 2) && ', '}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </CollapsibleContent>
+                              </Collapsible>
+                            )}
+                            
+                            {summary.sources && summary.sources.length > 0 && (
+                              <div className="text-xs text-muted-foreground pt-2 border-t">
+                                <span className="font-medium">Coverage:</span> {summary.article_count} articles from {summary.sources.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        </CardContent>
+                      )}
                     </Card>
                   );
                 })}
               </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Title</TableHead>
-                    <TableHead>Company</TableHead>
-                    <TableHead>Publisher</TableHead>
-                    <TableHead>Published</TableHead>
-                    <TableHead>Summary</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {newsItems.map((newsItem) => {
-                    const customer = items.find(i => i.url_key === newsItem.url_key);
-                    const sources = (newsItem.sources as any) || [];
-                    return (
-                      <TableRow key={newsItem.id}>
-                        <TableCell>
-                          <a
-                            href={newsItem.link || (sources[0]?.link)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="font-medium hover:underline"
-                          >
-                            {newsItem.title}
-                          </a>
-                        </TableCell>
-                        <TableCell>
-                          {customer && (
-                            <Badge variant="secondary">
-                              {customer.name}
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm">{newsItem.source}</TableCell>
-                        <TableCell className="text-sm">
-                          {formatDistanceToNow(new Date(newsItem.published_at), { addSuffix: true })}
-                        </TableCell>
-                        <TableCell className="max-w-md">
-                          <p className="text-sm truncate">{newsItem.summary}</p>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
             )}
           </TabsContent>
         </Tabs>
