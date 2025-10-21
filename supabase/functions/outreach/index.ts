@@ -95,6 +95,7 @@ async function buildToday(supabase: any, force: boolean) {
     if (!urlKey) continue; // Skip customers without valid URL
 
     // === P1: Check for News-based signal (highest priority) ===
+    // P1 is assigned whenever news is available for the company
     const { data: summary } = await supabase
       .from('company_news_summaries')
       .select('url_key, company_name, summary, groups, generated_at, article_count')
@@ -102,99 +103,72 @@ async function buildToday(supabase: any, force: boolean) {
       .maybeSingle();
 
     if (summary && summary.article_count > 0) {
-      const fresh = new Date(summary.generated_at) > twentyFourHoursAgo;
+      // Check for existing open news task to avoid duplicates
+      const { data: existingNews } = await supabase
+        .from('outreach_tasks')
+        .select('id, recommended_at, status')
+        .eq('customer_id', customer.id)
+        .eq('reason_code', 'news')
+        .eq('status', 'open')
+        .eq('recommended_at', today)
+        .limit(1);
+
+      if (existingNews && existingNews.length > 0) {
+        // Task already exists for today; skip
+        console.log(`News task already exists for ${customer.name} today`);
+        continue;
+      }
+
+      // News is available - assign P1
       const groups = summary.groups || [];
       const actionable = groups.filter((g: any) =>
         g.label && g.label.match(/AI|agent|integration|launch|update|partnership|hiring|funding/i)
       );
-
-      if (fresh && actionable.length > 0) {
-        // Check for existing open news task (sticky P1 logic)
-        const { data: existingNews } = await supabase
-          .from('outreach_tasks')
-          .select('id, recommended_at, news_published_at, status')
-          .eq('customer_id', customer.id)
-          .eq('reason_code', 'news')
-          .eq('status', 'open')
-          .order('recommended_at', { ascending: false })
-          .limit(1);
-
-        // Check if existing news is still fresh (< 30 days old)
-        const stillFresh =
-          existingNews?.[0] &&
-          existingNews[0].news_published_at &&
-          new Date(existingNews[0].news_published_at) >
-            new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
-        if (stillFresh) {
-          // Keep existing P1 task; skip creating new one
-          console.log(`Keeping existing news task for ${customer.name} (still fresh)`);
-          continue;
+      
+      // Use the first actionable group, or fall back to first group
+      const top = actionable.length > 0 ? actionable[0] : groups[0];
+      
+      if (top) {
+        const topBlurb = top.blurb || '';
+        const groupHash = simpleHash(top.label + topBlurb);
+        
+        // Generate news_relevance_reason
+        let relevanceReason = '';
+        let matchedKeywords: string[] = [];
+        
+        if (myCompany && myCompany.keywords && Array.isArray(myCompany.keywords)) {
+          const keywords = myCompany.keywords.map((k: string) => k.toLowerCase());
+          const blurbLower = topBlurb.toLowerCase();
+          matchedKeywords = keywords.filter((kw: string) => blurbLower.includes(kw));
         }
-
-        // Check for news cooldown (7 days) only if no sticky task
-        const { data: recentNews } = await supabase
-          .from('outreach_tasks')
-          .select('id')
-          .eq('customer_id', customer.id)
-          .eq('reason_code', 'news')
-          .gte('recommended_at', sevenDaysAgo.toISOString());
-
-        if (!recentNews || recentNews.length === 0) {
-          // Calculate relevance score
-          const top = actionable[0];
-          const topBlurb = top.blurb || '';
-          
-          // Simple keyword matching with my company profile
-          let keywordScore = 0;
-          let matchedKeywords: string[] = [];
-          if (myCompany && myCompany.keywords && Array.isArray(myCompany.keywords)) {
-            const keywords = myCompany.keywords.map((k: string) => k.toLowerCase());
-            const blurbLower = topBlurb.toLowerCase();
-            matchedKeywords = keywords.filter((kw: string) => blurbLower.includes(kw));
-            keywordScore = matchedKeywords.length > 0 ? 0.3 : 0;
-          }
-
-          const score = (fresh ? 0.4 : 0) + (actionable.length > 0 ? 0.3 : 0) + keywordScore;
-
-          if (score >= 0.6) {
-            const groupHash = simpleHash(top.label + topBlurb);
-            
-            // Generate news_relevance_reason
-            let relevanceReason = '';
-            if (top.why_it_matters) {
-              // Use the group's why_it_matters if available
-              relevanceReason = top.why_it_matters;
-            } else if (matchedKeywords.length > 0 && myCompany) {
-              // Generate based on keyword match
-              relevanceReason = `Relevant to us because we help with ${matchedKeywords[0]}; timing aligns with our ${myCompany.value_proposition ? 'offering' : 'capabilities'}.`;
-            } else if (myCompany && myCompany.value_proposition) {
-              // Generic fallback with value prop
-              relevanceReason = `Timing aligns with our ${myCompany.value_proposition.slice(0, 60)} offering.`;
-            } else {
-              // Safe generic fallback
-              relevanceReason = `Possible interest area; explore fit with our value.`;
-            }
-            
-            // Truncate to 140 chars
-            if (relevanceReason.length > 140) {
-              relevanceReason = relevanceReason.slice(0, 137) + '...';
-            }
-            
-            signals.push('news');
-            reasonCode = 'news';
-            priority = 1;
-            
-            newsData = {
-              news_group_labels: [top.label],
-              news_group_hashes: [groupHash],
-              news_blurb_snippet: topBlurb.slice(0, 300),
-              news_sources_short: (top.items || []).map((i: any) => i.publisher).slice(0, 3),
-              news_published_at: new Date(top.items?.[0]?.published_at || summary.generated_at).toISOString(),
-              news_relevance_reason: relevanceReason
-            };
-          }
+        
+        if (top.why_it_matters) {
+          relevanceReason = top.why_it_matters;
+        } else if (matchedKeywords.length > 0 && myCompany) {
+          relevanceReason = `Relevant to us because we help with ${matchedKeywords[0]}; timing aligns with our ${myCompany.value_proposition ? 'offering' : 'capabilities'}.`;
+        } else if (myCompany && myCompany.value_proposition) {
+          relevanceReason = `Timing aligns with our ${myCompany.value_proposition.slice(0, 60)} offering.`;
+        } else {
+          relevanceReason = `Possible interest area; explore fit with our value.`;
         }
+        
+        // Truncate to 140 chars
+        if (relevanceReason.length > 140) {
+          relevanceReason = relevanceReason.slice(0, 137) + '...';
+        }
+        
+        signals.push('news');
+        reasonCode = 'news';
+        priority = 1;
+        
+        newsData = {
+          news_group_labels: [top.label],
+          news_group_hashes: [groupHash],
+          news_blurb_snippet: topBlurb.slice(0, 300),
+          news_sources_short: (top.items || []).map((i: any) => i.publisher).slice(0, 3),
+          news_published_at: new Date(top.items?.[0]?.published_at || summary.generated_at).toISOString(),
+          news_relevance_reason: relevanceReason
+        };
       }
     }
 
